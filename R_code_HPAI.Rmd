@@ -1,0 +1,5576 @@
+---
+title: "hpai_publication_analysis_final"
+output: html_document
+date: "2026-08-25"
+---
+
+```{r}
+# =============================================================================
+# HPAI EUROPE: FINAL PUBLICATION ANALYSIS
+# =============================================================================
+#
+# Purpose:
+#   Reproducible statistical analysis for the HPAI migration/outbreak study.
+#
+# Analysis unit for occurrence models:
+#   NUTS3 region × ISO year × ISO week
+#
+# Host systems:
+#   Wild birds
+#   Captive poultry
+#
+# # Canonical publication datasets:
+#
+#   publication_output/data/analysis_occurrence_wild.rds
+#   publication_output/data/analysis_occurrence_poultry.rds
+#   publication_output/data/analysis_count_timing.rds
+#   publication_output/data/analysis_count_intensity.rds
+#   publication_output/data/analysis_first_detection.rds
+#   publication_output/data/region_lookup.rds
+#
+# Historical development workspaces are not required to reproduce
+# the final publication analysis.
+#
+#
+#
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# 0. USER SETTINGS
+# -----------------------------------------------------------------------------
+
+# Root directory containing the publication repository/output folder
+DATA_DIR <- "D:/data_processed"
+
+# Publication repository/output directory
+OUTPUT_DIR <- file.path(
+  DATA_DIR,
+  "publication_output"
+)
+
+# Canonical publication datasets
+PUBLICATION_DATA_DIR <- file.path(
+  OUTPUT_DIR,
+  "data"
+)
+
+# Set TRUE only when models should be refitted.
+REFIT_MODELS <- TRUE
+
+# Computationally expensive analyses are disabled by default.
+RUN_BOOTSTRAP <- FALSE
+RUN_REPEATED_VALIDATION <- FALSE
+
+BOOTSTRAP_ITERATIONS <- 2000
+
+set.seed(2026)
+
+
+# -----------------------------------------------------------------------------
+# 1. PACKAGES
+# -----------------------------------------------------------------------------
+
+required_packages <- c(
+  "dplyr",
+  "tidyr",
+  "ggplot2",
+  "scales",
+  "splines",
+  "glmmTMB",
+  "lme4",
+  "survival",
+  "broom",
+  "broom.mixed",
+  "performance",
+  "emmeans",
+  "patchwork"
+)
+
+missing_packages <- required_packages[
+  !vapply(
+    required_packages,
+    requireNamespace,
+    logical(1),
+    quietly = TRUE
+  )
+]
+
+if (length(missing_packages) > 0) {
+  stop(
+    "Missing required packages: ",
+    paste(missing_packages, collapse = ", "),
+    "\nInstall these packages before running the analysis."
+  )
+}
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(ggplot2)
+  library(scales)
+  library(splines)
+  library(glmmTMB)
+  library(lme4)
+  library(survival)
+  library(broom)
+  library(broom.mixed)
+  library(performance)
+  library(emmeans)
+  library(patchwork)
+})
+
+
+# -----------------------------------------------------------------------------
+# 2. OUTPUT DIRECTORIES
+# -----------------------------------------------------------------------------
+
+dir.create(
+  OUTPUT_DIR,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+dir.create(
+  file.path(OUTPUT_DIR, "tables"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+dir.create(
+  file.path(OUTPUT_DIR, "figures"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+dir.create(
+  file.path(OUTPUT_DIR, "models"),
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+
+# Small helper for publication tables
+write_table <- function(x, filename) {
+
+  path <- file.path(
+    OUTPUT_DIR,
+    "tables",
+    paste0(filename, ".csv")
+  )
+
+  write.csv(
+    as.data.frame(x),
+    path,
+    row.names = FALSE
+  )
+
+  message("Saved: ", path)
+}
+
+
+# -----------------------------------------------------------------------------
+# 3. LOAD CANONICAL PUBLICATION DATASETS
+# -----------------------------------------------------------------------------
+
+required_data_files <- c(
+  occurrence_wild =
+    "analysis_occurrence_wild.rds",
+
+  occurrence_poultry =
+    "analysis_occurrence_poultry.rds",
+
+  count_timing =
+    "analysis_count_timing.rds",
+
+  count_intensity =
+    "analysis_count_intensity.rds",
+
+  first_detection =
+    "analysis_first_detection.rds",
+
+  region_lookup =
+    "region_lookup.rds"
+)
+
+
+data_paths <- file.path(
+  PUBLICATION_DATA_DIR,
+  required_data_files
+)
+
+
+missing_data_files <- data_paths[
+  !file.exists(data_paths)
+]
+
+
+if (length(missing_data_files) > 0) {
+
+  stop(
+    "Missing canonical publication datasets:\n",
+    paste(
+      missing_data_files,
+      collapse = "\n"
+    )
+  )
+}
+
+
+# Load occurrence datasets
+dtm_wild <- readRDS(
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "analysis_occurrence_wild.rds"
+  )
+)
+
+dtm_capt <- readRDS(
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "analysis_occurrence_poultry.rds"
+  )
+)
+
+# Load count-model datasets
+count_model_data_minus5 <- readRDS(
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "analysis_count_timing.rds"
+  )
+)
+
+intensity_model_data <- readRDS(
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "analysis_count_intensity.rds"
+  )
+)
+
+# Archived first-detection dataset
+first_detection_exported <- readRDS(
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "analysis_first_detection.rds"
+  )
+)
+
+# Country-to-macro-region lookup
+region_lookup <- readRDS(
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "region_lookup.rds"
+  )
+)
+
+message("Canonical publication datasets loaded successfully.")
+
+PUBLICATION_DATA_DIR <- "D:/data_processed/publication_output/data"
+
+dtm_wild <- readRDS(
+  file.path(PUBLICATION_DATA_DIR, "analysis_occurrence_wild.rds")
+)
+
+dtm_capt <- readRDS(
+  file.path(PUBLICATION_DATA_DIR, "analysis_occurrence_poultry.rds")
+)
+
+count_model_data_minus5 <- readRDS(
+  file.path(PUBLICATION_DATA_DIR, "analysis_count_timing.rds")
+)
+
+intensity_model_data <- readRDS(
+  file.path(PUBLICATION_DATA_DIR, "analysis_count_intensity.rds")
+)
+
+first_detection_exported <- readRDS(
+  file.path(PUBLICATION_DATA_DIR, "analysis_first_detection.rds")
+)
+
+region_lookup <- readRDS(
+  file.path(PUBLICATION_DATA_DIR, "region_lookup.rds")
+)
+
+cat("Canonical publication datasets loaded successfully.\n")
+
+
+# -----------------------------------------------------------------------------
+# 4. VERIFY CANONICAL PUBLICATION DATASETS
+# -----------------------------------------------------------------------------
+
+cat("\nCanonical publication datasets:\n")
+
+cat(
+  "dtm_wild:",
+  nrow(dtm_wild),
+  "rows x",
+  ncol(dtm_wild),
+  "columns\n"
+)
+
+cat(
+  "dtm_capt:",
+  nrow(dtm_capt),
+  "rows x",
+  ncol(dtm_capt),
+  "columns\n"
+)
+
+cat(
+  "count_model_data_minus5:",
+  nrow(count_model_data_minus5),
+  "rows x",
+  ncol(count_model_data_minus5),
+  "columns\n"
+)
+
+cat(
+  "intensity_model_data:",
+  nrow(intensity_model_data),
+  "rows x",
+  ncol(intensity_model_data),
+  "columns\n"
+)
+
+cat(
+  "first_detection_exported:",
+  nrow(first_detection_exported),
+  "rows x",
+  ncol(first_detection_exported),
+  "columns\n"
+)
+
+cat(
+  "region_lookup:",
+  nrow(region_lookup),
+  "rows x",
+  ncol(region_lookup),
+  "columns\n"
+)
+
+
+# Expected dimensions of publication datasets
+stopifnot(
+  nrow(dtm_wild) == 360756,
+  nrow(dtm_capt) == 360756,
+  nrow(count_model_data_minus5) == 959346,
+  nrow(intensity_model_data) == 807026,
+  nrow(first_detection_exported) == 40084
+)
+# -----------------------------------------------------------------------------
+# 5. STANDARDISE VARIABLE TYPES
+# -----------------------------------------------------------------------------
+
+prepare_occurrence_data <- function(data) {
+
+  data %>%
+    mutate(
+      NUTS_ID = factor(NUTS_ID),
+
+      country = factor(country),
+
+      host_type = factor(
+        host_type,
+        levels = c("captive", "wild")
+      ),
+
+      season2 = factor(
+        season2,
+        levels = c("autumn", "spring")
+      ),
+
+      iso_year_f = factor(
+        iso_year_f,
+        levels = as.character(2015:2025)
+      ),
+
+      outbreak = as.integer(outbreak)
+    )
+}
+
+
+dtm_wild <- prepare_occurrence_data(dtm_wild)
+dtm_capt <- prepare_occurrence_data(dtm_capt)
+
+
+# -----------------------------------------------------------------------------
+# 6. DATA-INTEGRITY CHECKS
+# -----------------------------------------------------------------------------
+
+cat("\n")
+cat("============================================================\n")
+cat("CANONICAL OCCURRENCE DATA CHECK\n")
+cat("============================================================\n\n")
+
+
+cat("Wild birds dimensions:\n")
+print(dim(dtm_wild))
+
+cat("\nPoultry dimensions:\n")
+print(dim(dtm_capt))
+
+
+# These are the dimensions previously verified against the final analysis.
+expected_n <- 360756
+
+if (nrow(dtm_wild) != expected_n) {
+  stop(
+    "dtm_wild has ",
+    nrow(dtm_wild),
+    " rows; expected ",
+    expected_n
+  )
+}
+
+if (nrow(dtm_capt) != expected_n) {
+  stop(
+    "dtm_capt has ",
+    nrow(dtm_capt),
+    " rows; expected ",
+    expected_n
+  )
+}
+
+
+cat("\nWild bird outbreaks:\n")
+print(table(dtm_wild$outbreak, useNA = "ifany"))
+
+cat("\nPoultry outbreaks:\n")
+print(table(dtm_capt$outbreak, useNA = "ifany"))
+
+
+cat("\nWild bird season distribution:\n")
+print(table(dtm_wild$season2, useNA = "ifany"))
+
+cat("\nPoultry season distribution:\n")
+print(table(dtm_capt$season2, useNA = "ifany"))
+
+
+cat("\nWild bird year distribution:\n")
+print(table(dtm_wild$iso_year_f, useNA = "ifany"))
+
+cat("\nPoultry year distribution:\n")
+print(table(dtm_capt$iso_year_f, useNA = "ifany"))
+
+
+cat("\nWeeks since migration onset by season:\n")
+
+print(
+  dtm_wild %>%
+    group_by(season2) %>%
+    summarise(
+      min_wso = min(wso, na.rm = TRUE),
+      max_wso = max(wso, na.rm = TRUE),
+      observations = n(),
+      .groups = "drop"
+    )
+)
+
+
+cat("\nOutbreaks by season — wild birds:\n")
+
+print(
+  dtm_wild %>%
+    group_by(season2) %>%
+    summarise(
+      outbreaks = sum(outbreak),
+      observations = n(),
+      proportion = mean(outbreak),
+      .groups = "drop"
+    )
+)
+
+
+cat("\nOutbreaks by season — poultry:\n")
+
+print(
+  dtm_capt %>%
+    group_by(season2) %>%
+    summarise(
+      outbreaks = sum(outbreak),
+      observations = n(),
+      proportion = mean(outbreak),
+      .groups = "drop"
+    )
+)
+
+
+# Final hard checks
+stopifnot(
+  all(dtm_wild$outbreak %in% c(0L, 1L)),
+  all(dtm_capt$outbreak %in% c(0L, 1L)),
+  identical(levels(dtm_wild$season2), c("autumn", "spring")),
+  identical(levels(dtm_capt$season2), c("autumn", "spring"))
+)
+
+
+message("\nCanonical publication datasets loaded and validated successfully.")
+
+```
+
+
+```{r}
+# =============================================================================
+# 2. DESCRIPTIVE STATISTICS
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# 2.1 Combine canonical host-specific datasets for descriptive summaries
+# -----------------------------------------------------------------------------
+
+weekly <- bind_rows(
+  dtm_wild,
+  dtm_capt
+) %>%
+  mutate(
+    Host = factor(
+      host_type,
+      levels = c("captive", "wild"),
+      labels = c("Poultry", "Wild birds")
+    ),
+    Season = factor(
+      season2,
+      levels = c("autumn", "spring"),
+      labels = c("Autumn", "Spring")
+    )
+  )
+
+
+cat("\n")
+cat("============================================================\n")
+cat("DESCRIPTIVE STATISTICS\n")
+cat("============================================================\n\n")
+
+cat("Combined weekly dataset:\n")
+print(dim(weekly))
+
+
+# -----------------------------------------------------------------------------
+# 2.2 Overall outbreak occurrence by host
+# -----------------------------------------------------------------------------
+
+descriptive_host <- weekly %>%
+  group_by(Host) %>%
+  summarise(
+    observations = n(),
+    outbreak_region_weeks = sum(outbreak, na.rm = TRUE),
+    proportion = mean(outbreak, na.rm = TRUE),
+    percent = 100 * proportion,
+    .groups = "drop"
+  )
+
+cat("\nOutbreak occurrence by host:\n")
+print(descriptive_host)
+
+write_table(
+  descriptive_host,
+  "01_descriptive_outbreaks_by_host"
+)
+
+
+# -----------------------------------------------------------------------------
+# 2.3 Outbreak occurrence by host and season
+# -----------------------------------------------------------------------------
+
+descriptive_host_season <- weekly %>%
+  group_by(Host, Season) %>%
+  summarise(
+    observations = n(),
+    outbreak_region_weeks = sum(outbreak, na.rm = TRUE),
+    proportion = mean(outbreak, na.rm = TRUE),
+    percent = 100 * proportion,
+    .groups = "drop"
+  )
+
+cat("\nOutbreak occurrence by host and season:\n")
+print(descriptive_host_season)
+
+write_table(
+  descriptive_host_season,
+  "02_descriptive_outbreaks_by_host_season"
+)
+
+
+# -----------------------------------------------------------------------------
+# 2.4 Outbreak occurrence by host and year
+# -----------------------------------------------------------------------------
+
+descriptive_host_year <- weekly %>%
+  group_by(Host, iso_year) %>%
+  summarise(
+    observations = n(),
+    outbreak_region_weeks = sum(outbreak, na.rm = TRUE),
+    proportion = mean(outbreak, na.rm = TRUE),
+    percent = 100 * proportion,
+    .groups = "drop"
+  ) %>%
+  arrange(Host, iso_year)
+
+cat("\nOutbreak occurrence by host and year:\n")
+print(descriptive_host_year, n = Inf)
+
+write_table(
+  descriptive_host_year,
+  "03_descriptive_outbreaks_by_host_year"
+)
+
+
+# -----------------------------------------------------------------------------
+# 2.5 Weeks since migration onset represented in the data
+# -----------------------------------------------------------------------------
+
+descriptive_wso <- weekly %>%
+  group_by(Host, Season) %>%
+  summarise(
+    min_wso = min(wso, na.rm = TRUE),
+    max_wso = max(wso, na.rm = TRUE),
+    median_wso = median(wso, na.rm = TRUE),
+    observations = n(),
+    .groups = "drop"
+  )
+
+cat("\nWeeks since migration onset represented in dataset:\n")
+print(descriptive_wso)
+
+write_table(
+  descriptive_wso,
+  "04_descriptive_wso_range"
+)
+
+
+# -----------------------------------------------------------------------------
+# 2.6 Empirical timing of outbreak region-weeks
+#
+# IMPORTANT:
+# These are descriptive outbreak-week distributions.
+# They are NOT model-predicted peak timing and are NOT the lag-model estimates.
+# -----------------------------------------------------------------------------
+
+empirical_timing <- weekly %>%
+  filter(outbreak == 1) %>%
+  group_by(Host, Season) %>%
+  summarise(
+    n_outbreak_region_weeks = n(),
+
+    mean_wso = mean(wso, na.rm = TRUE),
+
+    median_wso = median(wso, na.rm = TRUE),
+
+    q25 = quantile(
+      wso,
+      probs = 0.25,
+      na.rm = TRUE,
+      names = FALSE
+    ),
+
+    q75 = quantile(
+      wso,
+      probs = 0.75,
+      na.rm = TRUE,
+      names = FALSE
+    ),
+
+    p05 = quantile(
+      wso,
+      probs = 0.05,
+      na.rm = TRUE,
+      names = FALSE
+    ),
+
+    p95 = quantile(
+      wso,
+      probs = 0.95,
+      na.rm = TRUE,
+      names = FALSE
+    ),
+
+    .groups = "drop"
+  )
+
+cat("\nEmpirical outbreak timing relative to migration onset:\n")
+print(empirical_timing)
+
+write_table(
+  empirical_timing,
+  "05_empirical_outbreak_timing"
+)
+
+
+# -----------------------------------------------------------------------------
+# 2.7 Number of spatial units and countries
+# -----------------------------------------------------------------------------
+
+spatial_summary <- weekly %>%
+  group_by(Host) %>%
+  summarise(
+    NUTS3_regions = n_distinct(NUTS_ID),
+    countries = n_distinct(country),
+    years = n_distinct(iso_year),
+    .groups = "drop"
+  )
+
+cat("\nSpatial and temporal coverage:\n")
+print(spatial_summary)
+
+write_table(
+  spatial_summary,
+  "06_spatial_temporal_coverage"
+)
+
+
+# -----------------------------------------------------------------------------
+# 2.8 Missingness in variables used by occurrence models
+# -----------------------------------------------------------------------------
+
+occurrence_variables <- c(
+  "outbreak",
+  "wso",
+  "mig_sc",
+  "season2",
+  "iso_year_f",
+  "water_sc",
+  "poul_sc",
+  "country",
+  "NUTS_ID"
+)
+
+missingness <- bind_rows(
+  lapply(
+    occurrence_variables,
+    function(v) {
+
+      tibble(
+        variable = v,
+        missing_wild = sum(is.na(dtm_wild[[v]])),
+        missing_captive = sum(is.na(dtm_capt[[v]]))
+      )
+    }
+  )
+)
+
+cat("\nMissingness in occurrence-model variables:\n")
+print(missingness)
+
+write_table(
+  missingness,
+  "07_occurrence_model_missingness"
+)
+
+
+# -----------------------------------------------------------------------------
+# 2.9 Final consistency checks
+# -----------------------------------------------------------------------------
+
+stopifnot(
+  sum(dtm_wild$outbreak, na.rm = TRUE) == 5858,
+  sum(dtm_capt$outbreak, na.rm = TRUE) == 2257,
+
+  sum(
+    dtm_wild$outbreak[dtm_wild$season2 == "autumn"],
+    na.rm = TRUE
+  ) == 3445,
+
+  sum(
+    dtm_wild$outbreak[dtm_wild$season2 == "spring"],
+    na.rm = TRUE
+  ) == 2413,
+
+  sum(
+    dtm_capt$outbreak[dtm_capt$season2 == "autumn"],
+    na.rm = TRUE
+  ) == 1369,
+
+  sum(
+    dtm_capt$outbreak[dtm_capt$season2 == "spring"],
+    na.rm = TRUE
+  ) == 888
+)
+
+
+message("\nStep 2 completed: descriptive statistics generated successfully.")
+```
+```{r}
+# =============================================================================
+# 3. OUTBREAK OCCURRENCE MODELS
+# =============================================================================
+#
+# Mixed-effects logistic regression of weekly outbreak occurrence.
+#
+# Separate models are fitted for wild birds and poultry.
+#
+# Fixed effects:
+#   - weeks since migration onset: natural cubic spline, df = 3
+#   - standardized migration intensity
+#   - season (reference = autumn)
+#   - calendar year (reference = 2015)
+#   - standardized distance to surface water
+#   - standardized distance to poultry production
+#
+# Random effects:
+#   - NUTS3 nested within country
+#
+# This specification reproduces the final occurrence-model coefficients
+# reported in the manuscript.
+# =============================================================================
+
+
+# -----------------------------------------------------------------------------
+# 3.1 Model formula
+# -----------------------------------------------------------------------------
+
+occurrence_formula <- outbreak ~
+  ns(wso, df = 3) +
+  mig_sc +
+  season2 +
+  iso_year_f +
+  water_sc +
+  poul_sc +
+  (1 | country/NUTS_ID)
+
+
+cat("\n")
+cat("============================================================\n")
+cat("OUTBREAK OCCURRENCE MODELS\n")
+cat("============================================================\n\n")
+
+cat("Model formula:\n")
+print(occurrence_formula)
+
+
+# -----------------------------------------------------------------------------
+# 3.2 Fit final host-specific models
+# -----------------------------------------------------------------------------
+
+message("\nFitting wild-bird occurrence model...")
+
+m_wild_final <- glmmTMB(
+  formula = occurrence_formula,
+  data = dtm_wild,
+  family = binomial(link = "logit")
+)
+
+message("Fitting poultry occurrence model...")
+
+m_capt_final <- glmmTMB(
+  formula = occurrence_formula,
+  data = dtm_capt,
+  family = binomial(link = "logit")
+)
+
+message("Occurrence models fitted successfully.")
+
+
+# -----------------------------------------------------------------------------
+# 3.3 Basic convergence checks
+# -----------------------------------------------------------------------------
+
+model_diagnostics <- tibble(
+  host = c("Wild birds", "Poultry"),
+
+  convergence_code = c(
+    m_wild_final$fit$convergence,
+    m_capt_final$fit$convergence
+  ),
+
+  positive_definite_hessian = c(
+    m_wild_final$sdr$pdHess,
+    m_capt_final$sdr$pdHess
+  ),
+
+  n = c(
+    nobs(m_wild_final),
+    nobs(m_capt_final)
+  ),
+
+  AIC = c(
+    AIC(m_wild_final),
+    AIC(m_capt_final)
+  ),
+
+  BIC = c(
+    BIC(m_wild_final),
+    BIC(m_capt_final)
+  ),
+
+  logLik = c(
+    as.numeric(logLik(m_wild_final)),
+    as.numeric(logLik(m_capt_final))
+  )
+)
+
+cat("\nModel diagnostics:\n")
+print(model_diagnostics)
+
+write_table(
+  model_diagnostics,
+  "08_occurrence_model_diagnostics"
+)
+
+
+if (
+  any(model_diagnostics$convergence_code != 0) ||
+  any(!model_diagnostics$positive_definite_hessian)
+) {
+  warning(
+    "At least one occurrence model has a convergence/Hessian problem."
+  )
+}
+
+
+# -----------------------------------------------------------------------------
+# 3.4 Extract fixed-effect coefficients
+# -----------------------------------------------------------------------------
+
+extract_occurrence_results <- function(model, host_label) {
+
+  broom.mixed::tidy(
+    model,
+    effects = "fixed",
+    component = "cond",
+    conf.int = TRUE
+  ) %>%
+    mutate(
+      Host = host_label,
+
+      OR = exp(estimate),
+      OR_low = exp(conf.low),
+      OR_high = exp(conf.high)
+    ) %>%
+    select(
+      Host,
+      term,
+      beta = estimate,
+      SE = std.error,
+      z = statistic,
+      p = p.value,
+      OR,
+      OR_low,
+      OR_high
+    )
+}
+
+
+occurrence_results <- bind_rows(
+  extract_occurrence_results(
+    m_wild_final,
+    "Wild birds"
+  ),
+
+  extract_occurrence_results(
+    m_capt_final,
+    "Poultry"
+  )
+)
+
+
+cat("\nFixed-effect results:\n")
+print(occurrence_results, n = Inf)
+
+write_table(
+  occurrence_results,
+  "09_occurrence_model_fixed_effects"
+)
+
+
+# -----------------------------------------------------------------------------
+# 3.5 Key interpretable coefficients
+#
+# Spline basis coefficients themselves are not interpreted as ordinary ORs.
+# Here we extract the directly interpretable covariates used in the manuscript.
+# -----------------------------------------------------------------------------
+
+key_terms <- c(
+  "mig_sc",
+  "season2spring",
+  "water_sc",
+  "poul_sc"
+)
+
+occurrence_key_results <- occurrence_results %>%
+  filter(term %in% key_terms) %>%
+  mutate(
+    variable = case_when(
+      term == "mig_sc" ~
+        "Migration intensity (per 1 SD)",
+
+      term == "season2spring" ~
+        "Spring vs autumn",
+
+      term == "water_sc" ~
+        "Distance to surface water (per 1 SD)",
+
+      term == "poul_sc" ~
+        "Distance to poultry production (per 1 SD)",
+
+      TRUE ~ term
+    )
+  ) %>%
+  select(
+    Host,
+    variable,
+    beta,
+    SE,
+    z,
+    p,
+    OR,
+    OR_low,
+    OR_high
+  )
+
+
+cat("\nKey occurrence-model estimates:\n")
+print(occurrence_key_results, n = Inf)
+
+write_table(
+  occurrence_key_results,
+  "10_occurrence_model_key_estimates"
+)
+
+
+# -----------------------------------------------------------------------------
+# 3.6 Random-effect variance components
+# -----------------------------------------------------------------------------
+
+extract_random_effects <- function(model, host_label) {
+
+  vc <- VarCorr(model)$cond
+
+  # Extract variance and SD directly from each random-intercept matrix
+  bind_rows(
+    lapply(names(vc), function(group_name) {
+
+      V <- vc[[group_name]]
+
+      tibble(
+        Host = host_label,
+        group = group_name,
+        variance = as.numeric(V[1, 1]),
+        SD = as.numeric(attr(V, "stddev")[1])
+      )
+    })
+  )
+}
+
+
+occurrence_random_effects <- bind_rows(
+  extract_random_effects(
+    m_wild_final,
+    "Wild birds"
+  ),
+  extract_random_effects(
+    m_capt_final,
+    "Poultry"
+  )
+)
+
+
+cat("\nRandom-effect variance components:\n")
+print(occurrence_random_effects)
+
+write_table(
+  occurrence_random_effects,
+  "11_occurrence_model_random_effects"
+)
+
+# -----------------------------------------------------------------------------
+# 3.7 Reproducibility checks against established final coefficients
+#
+# These values were independently recovered from the canonical datasets.
+# The tolerance is deliberately tight enough to catch accidental changes in
+# model specification while allowing trivial floating-point differences.
+# -----------------------------------------------------------------------------
+
+get_beta <- function(model, term) {
+
+  coefs <- fixef(model)$cond
+
+  unname(coefs[term])
+}
+
+
+reproducibility_check <- tibble(
+  Host = c(
+    "Wild birds",
+    "Wild birds",
+    "Wild birds",
+    "Wild birds",
+    "Poultry",
+    "Poultry",
+    "Poultry",
+    "Poultry"
+  ),
+
+  term = c(
+    "mig_sc",
+    "season2spring",
+    "water_sc",
+    "poul_sc",
+    "mig_sc",
+    "season2spring",
+    "water_sc",
+    "poul_sc"
+  ),
+
+  expected_beta = c(
+     0.23475,
+    -0.13290,
+    -0.06452,
+    -0.01084,
+
+     0.02371,
+    -0.23179,
+     0.13007,
+    -0.17955
+  ),
+
+  reproduced_beta = c(
+    get_beta(m_wild_final, "mig_sc"),
+    get_beta(m_wild_final, "season2spring"),
+    get_beta(m_wild_final, "water_sc"),
+    get_beta(m_wild_final, "poul_sc"),
+
+    get_beta(m_capt_final, "mig_sc"),
+    get_beta(m_capt_final, "season2spring"),
+    get_beta(m_capt_final, "water_sc"),
+    get_beta(m_capt_final, "poul_sc")
+  )
+) %>%
+  mutate(
+    absolute_difference =
+      abs(reproduced_beta - expected_beta),
+
+    matches =
+      absolute_difference < 1e-4
+  )
+
+
+cat("\nReproducibility check:\n")
+print(reproducibility_check, n = Inf)
+
+write_table(
+  reproducibility_check,
+  "12_occurrence_model_reproducibility_check"
+)
+
+
+if (!all(reproducibility_check$matches)) {
+
+  warning(
+    paste0(
+      "One or more occurrence-model coefficients differ from ",
+      "the previously verified estimates. Inspect table 12 before ",
+      "continuing."
+    )
+  )
+}
+
+
+# -----------------------------------------------------------------------------
+# 3.8 Save fitted models
+# -----------------------------------------------------------------------------
+
+saveRDS(
+  m_wild_final,
+  file.path(
+    OUTPUT_DIR,
+    "models",
+    "occurrence_model_wild_final.rds"
+  )
+)
+
+saveRDS(
+  m_capt_final,
+  file.path(
+    OUTPUT_DIR,
+    "models",
+    "occurrence_model_poultry_final.rds"
+  )
+)
+
+
+message("\nStep 3 completed: final occurrence GLMMs fitted and exported.")
+
+
+```
+
+```{r}
+# =============================================================================
+# 4. SPATIAL HETEROGENEITY: ICC AND MEDIAN ODDS RATIO
+# =============================================================================
+#
+# For logistic mixed-effects models, residual variance on the latent scale is
+# approximated by pi^2 / 3.
+#
+# Random intercepts:
+#   country
+#   NUTS3 nested within country
+#
+# ICCs quantify the proportion of latent-scale variance attributable to the
+# spatial hierarchy.
+#
+# MOR expresses random-effect heterogeneity on the odds-ratio scale.
+# =============================================================================
+
+
+cat("\n")
+cat("============================================================\n")
+cat("ICC AND MEDIAN ODDS RATIOS\n")
+cat("============================================================\n\n")
+
+
+# -----------------------------------------------------------------------------
+# 4.1 Helper function
+# -----------------------------------------------------------------------------
+
+calculate_spatial_metrics <- function(model, host_label) {
+
+  vc <- VarCorr(model)$cond
+
+  # Identify the two random-effect components
+  nuts_group <- grep(
+    "NUTS_ID",
+    names(vc),
+    value = TRUE
+  )
+
+  country_group <- grep(
+    "^country$",
+    names(vc),
+    value = TRUE
+  )
+
+  if (
+    length(nuts_group) != 1 ||
+    length(country_group) != 1
+  ) {
+    stop(
+      "Could not uniquely identify NUTS3 and country random effects for ",
+      host_label
+    )
+  }
+
+
+  # Random-intercept variances
+  var_nuts <- as.numeric(
+    vc[[nuts_group]][1, 1]
+  )
+
+  var_country <- as.numeric(
+    vc[[country_group]][1, 1]
+  )
+
+
+  # Logistic latent residual variance
+  var_residual <- pi^2 / 3
+
+  total_variance <-
+    var_country +
+    var_nuts +
+    var_residual
+
+
+  # ----------------------------------------------------------
+  # ICC
+  # ----------------------------------------------------------
+
+  # Variance attributable specifically to country
+  ICC_country <-
+    var_country / total_variance
+
+  # Additional variance attributable to NUTS3 within country
+  ICC_NUTS3 <-
+    var_nuts / total_variance
+
+  # Total spatial clustering
+  ICC_combined <-
+    (var_country + var_nuts) /
+    total_variance
+
+
+  # ----------------------------------------------------------
+  # Proportion of spatial variance at each level
+  # ----------------------------------------------------------
+
+  spatial_variance <-
+    var_country + var_nuts
+
+  spatial_share_country <-
+    var_country / spatial_variance
+
+  spatial_share_NUTS3 <-
+    var_nuts / spatial_variance
+
+
+  # ----------------------------------------------------------
+  # Median Odds Ratio
+  #
+  # MOR = exp[ sqrt(2 * variance) * Phi^-1(0.75) ]
+  # ----------------------------------------------------------
+
+  MOR_country <- exp(
+    sqrt(2 * var_country) *
+      qnorm(0.75)
+  )
+
+  MOR_NUTS3 <- exp(
+    sqrt(2 * var_nuts) *
+      qnorm(0.75)
+  )
+
+  # Combined spatial variance, useful as an overall measure
+  MOR_combined <- exp(
+    sqrt(2 * spatial_variance) *
+      qnorm(0.75)
+  )
+
+
+  tibble(
+    Host = host_label,
+
+    variance_country = var_country,
+    variance_NUTS3 = var_nuts,
+    latent_residual_variance = var_residual,
+    total_latent_variance = total_variance,
+
+    ICC_country = ICC_country,
+    ICC_NUTS3 = ICC_NUTS3,
+    ICC_combined = ICC_combined,
+
+    spatial_share_country = spatial_share_country,
+    spatial_share_NUTS3 = spatial_share_NUTS3,
+
+    MOR_country = MOR_country,
+    MOR_NUTS3 = MOR_NUTS3,
+    MOR_combined = MOR_combined
+  )
+}
+
+
+# -----------------------------------------------------------------------------
+# 4.2 Calculate metrics
+# -----------------------------------------------------------------------------
+
+spatial_metrics <- bind_rows(
+
+  calculate_spatial_metrics(
+    m_wild_final,
+    "Wild birds"
+  ),
+
+  calculate_spatial_metrics(
+    m_capt_final,
+    "Poultry"
+  )
+)
+
+
+cat("Spatial heterogeneity metrics:\n")
+print(
+  spatial_metrics,
+  n = Inf,
+  width = Inf
+)
+
+
+write_table(
+  spatial_metrics,
+  "13_occurrence_model_ICC_MOR"
+)
+
+
+# -----------------------------------------------------------------------------
+# 4.3 Reader-friendly percentage table
+# -----------------------------------------------------------------------------
+
+spatial_metrics_summary <- spatial_metrics %>%
+  transmute(
+    Host,
+
+    country_variance =
+      variance_country,
+
+    NUTS3_variance =
+      variance_NUTS3,
+
+    country_ICC_percent =
+      100 * ICC_country,
+
+    NUTS3_ICC_percent =
+      100 * ICC_NUTS3,
+
+    combined_ICC_percent =
+      100 * ICC_combined,
+
+    percent_spatial_variance_country =
+      100 * spatial_share_country,
+
+    percent_spatial_variance_NUTS3 =
+      100 * spatial_share_NUTS3,
+
+    MOR_country,
+    MOR_NUTS3,
+    MOR_combined
+  )
+
+
+cat("\nPublication-scale spatial summary:\n")
+
+print(
+  spatial_metrics_summary,
+  n = Inf,
+  width = Inf
+)
+
+
+write_table(
+  spatial_metrics_summary,
+  "14_occurrence_spatial_heterogeneity_summary"
+)
+
+
+# -----------------------------------------------------------------------------
+# 4.4 Save exact values used for manuscript checking
+# -----------------------------------------------------------------------------
+
+manuscript_spatial_check <- spatial_metrics %>%
+  transmute(
+    Host,
+
+    combined_ICC =
+      round(ICC_combined, 3),
+
+    NUTS3_share_of_spatial_variance =
+      round(spatial_share_NUTS3, 3),
+
+    country_MOR =
+      round(MOR_country, 2),
+
+    NUTS3_MOR =
+      round(MOR_NUTS3, 2),
+
+    combined_MOR =
+      round(MOR_combined, 2)
+  )
+
+
+cat("\nValues for manuscript cross-check:\n")
+
+print(
+  manuscript_spatial_check,
+  n = Inf,
+  width = Inf
+)
+
+
+write_table(
+  manuscript_spatial_check,
+  "15_manuscript_spatial_check"
+)
+
+
+message(
+  "\nStep 4 completed: ICC and MOR calculated successfully."
+)
+
+
+```
+
+```{r}
+# =============================================================================
+# 5. OCCURRENCE-MODEL VALIDATION AND DISCRIMINATION
+# =============================================================================
+#
+# Final host-specific occurrence GLMMs:
+#   m_wild_final
+#   m_capt_final
+#
+# Validation metrics:
+#   - ROC-AUC
+#   - Precision-recall AUC (PR-AUC)
+#   - Brier score
+#   - Calibration intercept
+#   - Calibration slope
+#   - Calibration by predicted-risk decile
+#
+# Population-level predictions are used (random effects excluded), providing
+# assessment of discrimination/calibration from the fixed-effect component.
+# =============================================================================
+
+cat("\n")
+cat("============================================================\n")
+cat("OCCURRENCE MODEL VALIDATION\n")
+cat("============================================================\n\n")
+
+
+# -----------------------------------------------------------------------------
+# 5.1 Required packages
+# -----------------------------------------------------------------------------
+
+required_validation_packages <- c(
+  "pROC",
+  "PRROC"
+)
+
+missing_validation_packages <- required_validation_packages[
+  !vapply(
+    required_validation_packages,
+    requireNamespace,
+    logical(1),
+    quietly = TRUE
+  )
+]
+
+if (length(missing_validation_packages) > 0) {
+  stop(
+    "Install these packages before running Step 5: ",
+    paste(missing_validation_packages, collapse = ", "),
+    "\nRun:\ninstall.packages(c(",
+    paste0('"', missing_validation_packages, '"', collapse = ", "),
+    "))"
+  )
+}
+
+
+# -----------------------------------------------------------------------------
+# 5.2 Generate population-level predictions
+# -----------------------------------------------------------------------------
+
+make_validation_data <- function(model, data, host_label) {
+
+  p <- predict(
+    model,
+    newdata = data,
+    type = "response",
+    re.form = NA
+  )
+
+  tibble(
+    Host = host_label,
+    observed = as.integer(data$outbreak),
+    predicted = as.numeric(p)
+  ) %>%
+    filter(
+      is.finite(predicted),
+      !is.na(observed)
+    )
+}
+
+
+validation_wild <- make_validation_data(
+  m_wild_final,
+  dtm_wild,
+  "Wild birds"
+)
+
+validation_capt <- make_validation_data(
+  m_capt_final,
+  dtm_capt,
+  "Poultry"
+)
+
+
+cat("Validation observations:\n")
+
+print(
+  bind_rows(
+    validation_wild %>%
+      summarise(
+        Host = first(Host),
+        n = n(),
+        events = sum(observed)
+      ),
+
+    validation_capt %>%
+      summarise(
+        Host = first(Host),
+        n = n(),
+        events = sum(observed)
+      )
+  )
+)
+
+
+# -----------------------------------------------------------------------------
+# 5.3 ROC-AUC
+# -----------------------------------------------------------------------------
+
+calculate_roc_auc <- function(d) {
+
+  roc_object <- pROC::roc(
+    response = d$observed,
+    predictor = d$predicted,
+    levels = c(0, 1),
+    direction = "<",
+    quiet = TRUE
+  )
+
+  ci <- pROC::ci.auc(
+    roc_object,
+    method = "delong"
+  )
+
+  tibble(
+    ROC_AUC = as.numeric(
+      pROC::auc(roc_object)
+    ),
+    ROC_AUC_lower = as.numeric(ci[1]),
+    ROC_AUC_upper = as.numeric(ci[3])
+  )
+}
+
+
+# -----------------------------------------------------------------------------
+# 5.4 Precision-recall AUC
+# -----------------------------------------------------------------------------
+
+calculate_pr_auc <- function(d) {
+
+  positive_scores <- d$predicted[
+    d$observed == 1
+  ]
+
+  negative_scores <- d$predicted[
+    d$observed == 0
+  ]
+
+  pr <- PRROC::pr.curve(
+    scores.class0 = positive_scores,
+    scores.class1 = negative_scores,
+    curve = FALSE
+  )
+
+  tibble(
+    PR_AUC = as.numeric(pr$auc.integral)
+  )
+}
+
+
+# -----------------------------------------------------------------------------
+# 5.5 Brier score
+# -----------------------------------------------------------------------------
+
+calculate_brier <- function(d) {
+
+  tibble(
+    Brier_score = mean(
+      (d$observed - d$predicted)^2
+    ),
+    prevalence = mean(d$observed),
+    null_Brier = mean(
+      (d$observed - mean(d$observed))^2
+    )
+  )
+}
+
+
+# -----------------------------------------------------------------------------
+# 5.6 Calibration intercept and slope
+# -----------------------------------------------------------------------------
+#
+# Predictions are converted to the logit scale.
+#
+# Calibration intercept:
+#   observed outcome ~ offset(predicted log odds)
+#
+# Ideal = 0.
+#
+# Calibration slope:
+#   observed outcome ~ predicted log odds
+#
+# Ideal = 1.
+# -----------------------------------------------------------------------------
+
+calculate_calibration <- function(d) {
+
+  eps <- 1e-8
+
+  d <- d %>%
+    mutate(
+      predicted_safe = pmin(
+        pmax(predicted, eps),
+        1 - eps
+      ),
+
+      lp = qlogis(predicted_safe)
+    )
+
+
+  # Calibration intercept
+  fit_intercept <- glm(
+    observed ~ 1 + offset(lp),
+    data = d,
+    family = binomial()
+  )
+
+
+  # Calibration slope
+  fit_slope <- glm(
+    observed ~ lp,
+    data = d,
+    family = binomial()
+  )
+
+
+  tibble(
+    calibration_intercept =
+      unname(coef(fit_intercept)[1]),
+
+    calibration_slope =
+      unname(coef(fit_slope)["lp"])
+  )
+}
+
+
+# -----------------------------------------------------------------------------
+# 5.7 Calculate all validation metrics
+# -----------------------------------------------------------------------------
+
+calculate_validation_metrics <- function(d) {
+
+  bind_cols(
+    calculate_roc_auc(d),
+    calculate_pr_auc(d),
+    calculate_brier(d),
+    calculate_calibration(d)
+  )
+}
+
+
+validation_metrics <- bind_rows(
+
+  calculate_validation_metrics(
+    validation_wild
+  ) %>%
+    mutate(
+      Host = "Wild birds",
+      .before = 1
+    ),
+
+  calculate_validation_metrics(
+    validation_capt
+  ) %>%
+    mutate(
+      Host = "Poultry",
+      .before = 1
+    )
+)
+
+
+cat("\nValidation and discrimination metrics:\n")
+
+print(
+  validation_metrics,
+  n = Inf,
+  width = Inf
+)
+
+
+write_table(
+  validation_metrics,
+  "16_occurrence_model_validation_metrics"
+)
+
+
+# -----------------------------------------------------------------------------
+# 5.8 Calibration by predicted-risk decile
+# -----------------------------------------------------------------------------
+
+make_calibration_table <- function(d) {
+
+  d %>%
+    mutate(
+      risk_decile = ntile(
+        predicted,
+        10
+      )
+    ) %>%
+    group_by(
+      Host,
+      risk_decile
+    ) %>%
+    summarise(
+      observations = n(),
+
+      events = sum(observed),
+
+      mean_predicted_probability =
+        mean(predicted),
+
+      observed_probability =
+        mean(observed),
+
+      .groups = "drop"
+    )
+}
+
+
+calibration_table <- bind_rows(
+
+  make_calibration_table(
+    validation_wild
+  ),
+
+  make_calibration_table(
+    validation_capt
+  )
+)
+
+
+cat("\nCalibration by predicted-risk decile:\n")
+
+print(
+  calibration_table,
+  n = Inf,
+  width = Inf
+)
+
+
+write_table(
+  calibration_table,
+  "17_occurrence_model_calibration_deciles"
+)
+
+
+# -----------------------------------------------------------------------------
+# 5.9 Risk enrichment
+# -----------------------------------------------------------------------------
+#
+# Because outbreak occurrence is rare, this is useful alongside ROC-AUC:
+# how concentrated are observed outbreaks in the highest predicted-risk
+# observations?
+# -----------------------------------------------------------------------------
+
+calculate_risk_enrichment <- function(d) {
+
+  baseline <- mean(d$observed)
+
+  d %>%
+    mutate(
+      risk_decile = ntile(
+        predicted,
+        10
+      )
+    ) %>%
+    group_by(
+      Host,
+      risk_decile
+    ) %>%
+    summarise(
+      observations = n(),
+      events = sum(observed),
+      observed_risk = mean(observed),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      baseline_risk = baseline,
+      enrichment =
+        observed_risk / baseline
+    )
+}
+
+
+risk_enrichment <- bind_rows(
+
+  calculate_risk_enrichment(
+    validation_wild
+  ),
+
+  calculate_risk_enrichment(
+    validation_capt
+  )
+)
+
+
+cat("\nRisk enrichment by predicted-risk decile:\n")
+
+print(
+  risk_enrichment,
+  n = Inf,
+  width = Inf
+)
+
+
+write_table(
+  risk_enrichment,
+  "18_occurrence_model_risk_enrichment"
+)
+
+
+# -----------------------------------------------------------------------------
+# 5.10 Publication-ready calibration figure
+# -----------------------------------------------------------------------------
+
+calibration_plot_data <- calibration_table %>%
+  mutate(
+    Host = factor(
+      Host,
+      levels = c(
+        "Wild birds",
+        "Poultry"
+      )
+    )
+  )
+
+
+p_calibration <- ggplot(
+  calibration_plot_data,
+  aes(
+    x = mean_predicted_probability,
+    y = observed_probability
+  )
+) +
+
+  geom_abline(
+    intercept = 0,
+    slope = 1,
+    linetype = "dashed",
+    linewidth = 0.6
+  ) +
+
+  geom_line(
+    linewidth = 0.8
+  ) +
+
+  geom_point(
+    size = 2
+  ) +
+
+  facet_wrap(
+    ~ Host,
+    scales = "free"
+  ) +
+
+  scale_x_continuous(
+    labels = scales::label_percent(
+      accuracy = 0.1
+    )
+  ) +
+
+  scale_y_continuous(
+    labels = scales::label_percent(
+      accuracy = 0.1
+    )
+  ) +
+
+  labs(
+    x = "Mean predicted outbreak probability",
+    y = "Observed outbreak proportion",
+    title = "Calibration of outbreak occurrence models"
+  ) +
+
+  theme_classic(
+    base_size = 11
+  ) +
+
+  theme(
+    plot.title = element_text(
+      face = "bold",
+      size = 11.5
+    ),
+
+    strip.background =
+      element_blank(),
+
+    strip.text =
+      element_text(face = "bold"),
+
+    axis.title =
+      element_text(face = "bold")
+  )
+
+
+print(p_calibration)
+
+
+ggsave(
+  filename = file.path(
+    OUTPUT_DIR,
+    "figures",
+    "occurrence_model_calibration.png"
+  ),
+  plot = p_calibration,
+  width = 7,
+  height = 3.8,
+  dpi = 600
+)
+
+
+ggsave(
+  filename = file.path(
+    OUTPUT_DIR,
+    "figures",
+    "occurrence_model_calibration.pdf"
+  ),
+  plot = p_calibration,
+  width = 7,
+  height = 3.8
+)
+
+
+message(
+  "\nStep 5 completed: occurrence-model validation generated successfully."
+)
+
+```
+
+
+```{r}
+# ============================================================
+# STEP 6 — FIGURE 2
+# Seasonal migration dynamics and outbreak occurrence
+# ============================================================
+
+library(dplyr)
+library(ggplot2)
+library(patchwork)
+library(scales)
+library(grid)
+
+cat("\n============================================================\n")
+cat("FIGURE 2 — SEASONAL MIGRATION AND OUTBREAK TIMING\n")
+cat("============================================================\n")
+
+
+# ------------------------------------------------------------
+# PANEL A — Seasonal migration intensity
+# ------------------------------------------------------------
+
+fig2A_data <- dtm_wild %>%
+  group_by(iso_week) %>%
+  summarise(
+    migration_intensity = mean(mig_intensity, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  filter(iso_week >= 1, iso_week <= 52) %>%
+  mutate(
+    migration_scaled =
+      (migration_intensity - min(migration_intensity)) /
+      (max(migration_intensity) - min(migration_intensity))
+  )
+
+pA_final <- ggplot(
+  fig2A_data,
+  aes(x = iso_week, y = migration_scaled)
+) +
+  geom_line(
+    linewidth = 1.05,
+    colour = "black"
+  ) +
+  scale_x_continuous(
+    limits = c(1, 52),
+    breaks = c(10, 20, 30, 40, 52),
+    expand = expansion(mult = c(0, 0))
+  ) +
+  scale_y_continuous(
+    limits = c(0, 1),
+    breaks = c(0, 0.25, 0.50, 0.75, 1),
+    expand = expansion(mult = c(0, 0.02))
+  ) +
+  labs(
+    title = "Seasonal migration dynamics in wild birds",
+    x = "Calendar week (ISO)",
+    y = "Scaled migration intensity (0–1)"
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 11.5),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(colour = "black"),
+    plot.margin = margin(7, 10, 7, 10)
+  )
+
+
+# ------------------------------------------------------------
+# PANEL B — Seasonal outbreak occurrence
+# ------------------------------------------------------------
+
+fig2B_data <- bind_rows(
+  dtm_capt,
+  dtm_wild
+) %>%
+  group_by(iso_week, host_type) %>%
+  summarise(
+    prop = mean(outbreak, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Host = factor(
+      host_type,
+      levels = c("captive", "wild"),
+      labels = c("Poultry", "Wild birds")
+    )
+  )
+
+pB_final <- ggplot(
+  fig2B_data,
+  aes(
+    x = iso_week,
+    y = prop,
+    colour = Host
+  )
+) +
+  geom_line(linewidth = 1.05) +
+  scale_colour_manual(
+    values = c(
+      "Poultry" = "grey55",
+      "Wild birds" = "black"
+    )
+  ) +
+  scale_x_continuous(
+    limits = c(1, 52),
+    breaks = c(10, 20, 30, 40, 52),
+    expand = expansion(mult = c(0, 0))
+  ) +
+  scale_y_continuous(
+    labels = label_percent(accuracy = 1),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  labs(
+    title = "Seasonal outbreak occurrence",
+    x = "Calendar week (ISO)",
+    y = "NUTS3 region-weeks with outbreaks (%)",
+    colour = NULL
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 11.5),
+    legend.position = "top",
+    legend.justification = "left",
+    legend.direction = "horizontal",
+    legend.margin = margin(t = -3, b = 3),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(colour = "black"),
+    plot.margin = margin(7, 10, 7, 10)
+  )
+
+
+# ------------------------------------------------------------
+# PANEL C — Wild-bird outbreak timing relative to onset
+# Empirical NUTS3-week outbreak probability
+# ------------------------------------------------------------
+
+fig2C_data <- dtm_wild %>%
+  filter(
+    wso >= -5,
+    wso <= 12
+  ) %>%
+  group_by(season2, wso) %>%
+  summarise(
+    n_region_weeks = n(),
+    n_outbreaks = sum(outbreak),
+    outbreak_probability = mean(outbreak),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    Season = factor(
+      season2,
+      levels = c("spring", "autumn"),
+      labels = c("Spring", "Autumn")
+    )
+  )
+
+# Save exact source data for reproducibility
+write.csv(
+  fig2C_data,
+  file.path(
+    OUTPUT_DIR,
+    "tables",
+    "19_figure2C_observed_timing.csv"
+  ),
+  row.names = FALSE
+)
+
+pC_final <- ggplot(
+  fig2C_data,
+  aes(
+    x = wso,
+    y = outbreak_probability,
+    colour = Season
+  )
+) +
+  geom_line(
+    linewidth = 1.05
+  ) +
+  geom_point(
+    size = 1.6
+  ) +
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed",
+    linewidth = 0.6,
+    colour = "grey45"
+  ) +
+  scale_colour_manual(
+    values = c(
+      "Spring" = "#00BFC4",
+      "Autumn" = "#F8766D"
+    )
+  ) +
+  scale_x_continuous(
+    limits = c(-5, 12),
+    breaks = c(-5, 0, 5, 10),
+    expand = expansion(mult = c(0, 0))
+  ) +
+  scale_y_continuous(
+    labels = label_percent(accuracy = 1),
+    expand = expansion(mult = c(0, 0.05))
+  ) +
+  labs(
+    title = "Wild bird outbreak timing relative to migration onset",
+    x = "Weeks since migration onset",
+    y = "NUTS3 region-weeks with outbreaks (%)",
+    colour = NULL
+  ) +
+  theme_classic(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 11.5),
+    legend.position = "top",
+    legend.justification = "left",
+    legend.direction = "horizontal",
+    legend.margin = margin(t = -3, b = 3),
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(colour = "black"),
+    plot.margin = margin(7, 10, 7, 10)
+  )
+
+
+# ------------------------------------------------------------
+# Empirical timing summary
+# ------------------------------------------------------------
+
+fig2C_timing <- dtm_wild %>%
+  filter(
+    outbreak == 1,
+    wso >= -5,
+    wso <= 12
+  ) %>%
+  group_by(season2) %>%
+  summarise(
+    n = n(),
+    median_week = median(wso),
+    q25 = quantile(wso, 0.25),
+    q75 = quantile(wso, 0.75),
+    .groups = "drop"
+  )
+
+cat("\nWild-bird empirical timing:\n")
+print(fig2C_timing)
+
+write.csv(
+  fig2C_timing,
+  file.path(
+    OUTPUT_DIR,
+    "tables",
+    "20_wild_bird_empirical_timing.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# ------------------------------------------------------------
+# ASSEMBLE A–C
+# ------------------------------------------------------------
+# ============================================================
+# FINAL ASSEMBLY OF FIGURE 2
+# ============================================================
+
+library(patchwork)
+
+# Give each individual panel a sensible shape first
+pA_final <- pA_final +
+  theme(
+    aspect.ratio = 0.42,
+    plot.margin = margin(8, 10, 8, 10)
+  )
+
+pB_final <- pB_final +
+  theme(
+    aspect.ratio = 0.42,
+    plot.margin = margin(8, 10, 8, 10)
+  )
+
+pC_final <- pC_final +
+  theme(
+    aspect.ratio = 0.42,
+    plot.margin = margin(8, 10, 8, 10)
+  )
+
+
+# Stack panels vertically
+Figure2_final <- wrap_plots(
+  pA_final,
+  pB_final,
+  pC_final,
+  ncol = 1,
+  heights = c(1, 1, 1)
+) +
+  plot_annotation(
+    tag_levels = "A"
+  ) &
+  theme(
+    plot.tag = element_text(
+      face = "bold",
+      size = 13
+    ),
+    plot.tag.position = c(0, 1)
+  )
+
+
+# IMPORTANT: save at a tall physical size
+ggsave(
+  filename = file.path(
+    OUTPUT_DIR,
+    "figures",
+    "Figure2_final.png"
+  ),
+  plot = Figure2_final,
+  width = 7.5,
+  height = 11.5,
+  units = "in",
+  dpi = 600,
+  bg = "white",
+  limitsize = FALSE
+)
+
+ggsave(
+  filename = file.path(
+    OUTPUT_DIR,
+    "figures",
+    "Figure2_final.pdf"
+  ),
+  plot = Figure2_final,
+  width = 7.5,
+  height = 11.5,
+  units = "in",
+  limitsize = FALSE
+)
+
+cat(
+  "\nFigure saved to:\n",
+  file.path(OUTPUT_DIR, "figures", "Figure2_final.png"),
+  "\n"
+)
+
+# Display last
+print(Figure2_final)
+
+```
+
+
+
+```{r}
+# =============================================================================
+# STEP 7 — OUTBREAK COUNT MODELS
+# =============================================================================
+#
+# Two complementary negative-binomial mixed-effects analyses:
+#
+# 1. Migration-relative timing model
+#    Data: count_model_data_minus5
+#    Window: -5 to +12 weeks relative to migration onset
+#    Timing: natural cubic spline, df = 4
+#
+# 2. Migration-intensity model
+#    Data: intensity_model_data
+#    Migration intensity standardized to 1 SD
+#
+# Both models account for:
+#    - country / NUTS3 spatial hierarchy
+#    - repeated NUTS3-year observations
+#
+# =============================================================================
+
+cat("\n")
+cat("============================================================\n")
+cat("OUTBREAK COUNT MODELS\n")
+cat("============================================================\n\n")
+
+
+# -----------------------------------------------------------------------------
+# 7.1 Verify canonical count-model datasets
+# -----------------------------------------------------------------------------
+
+if (!exists("count_model_data_minus5")) {
+  stop(
+    "count_model_data_minus5 was not found in the loaded analytical workspace."
+  )
+}
+
+if (!exists("intensity_model_data")) {
+  stop(
+    "intensity_model_data was not found in the loaded analytical workspace."
+  )
+}
+
+
+cat("Count timing dataset dimensions:\n")
+print(dim(count_model_data_minus5))
+
+cat("\nMigration-intensity dataset dimensions:\n")
+print(dim(intensity_model_data))
+
+
+# -----------------------------------------------------------------------------
+# 7.2 Verify required variables
+# -----------------------------------------------------------------------------
+
+timing_required <- c(
+  "outbreak_n",
+  "weeks_since_mig_onset",
+  "season",
+  "host_type",
+  "year_c",
+  "macro_region",
+  "country_code",
+  "NUTS_ID",
+  "iso_year"
+)
+
+intensity_required <- c(
+  "outbreak_n",
+  "mig_intensity_sc",
+  "season",
+  "host_type",
+  "year_c",
+  "macro_region",
+  "country_code",
+  "NUTS_ID",
+  "iso_year"
+)
+
+
+missing_timing <- setdiff(
+  timing_required,
+  names(count_model_data_minus5)
+)
+
+missing_intensity <- setdiff(
+  intensity_required,
+  names(intensity_model_data)
+)
+
+
+if (length(missing_timing) > 0) {
+  stop(
+    "count_model_data_minus5 is missing: ",
+    paste(missing_timing, collapse = ", ")
+  )
+}
+
+if (length(missing_intensity) > 0) {
+  stop(
+    "intensity_model_data is missing: ",
+    paste(missing_intensity, collapse = ", ")
+  )
+}
+
+
+# -----------------------------------------------------------------------------
+# 7.3 Set reference levels consistently
+# -----------------------------------------------------------------------------
+#
+# Reference categories used in interpretation:
+#   season: autumn
+#   host: captive poultry
+#   macro-region: Eastern
+# -----------------------------------------------------------------------------
+
+prepare_count_data <- function(d) {
+
+  d %>%
+    mutate(
+      season = relevel(
+        factor(season),
+        ref = "autumn"
+      ),
+
+      host_type = relevel(
+        factor(host_type),
+        ref = "captive"
+      ),
+
+      macro_region = relevel(
+        factor(macro_region),
+        ref = "Eastern"
+      ),
+
+      country_code = factor(country_code),
+      NUTS_ID = factor(NUTS_ID)
+    )
+}
+
+
+count_model_data_minus5 <- prepare_count_data(
+  count_model_data_minus5
+)
+
+intensity_model_data <- prepare_count_data(
+  intensity_model_data
+)
+
+
+# -----------------------------------------------------------------------------
+# 7.4 Check migration-relative analysis window
+# -----------------------------------------------------------------------------
+
+timing_range <- range(
+  count_model_data_minus5$weeks_since_mig_onset,
+  na.rm = TRUE
+)
+
+cat("\nMigration-relative timing window:\n")
+print(timing_range)
+
+
+stopifnot(
+  timing_range[1] == -5,
+  timing_range[2] == 12
+)
+
+
+# -----------------------------------------------------------------------------
+# 7.5 Count model 1:
+# Migration-relative timing
+# -----------------------------------------------------------------------------
+
+count_timing_formula <- outbreak_n ~
+  ns(weeks_since_mig_onset, df = 4) * season * host_type +
+  year_c * host_type +
+  macro_region +
+  (1 | country_code/NUTS_ID) +
+  (1 | NUTS_ID:iso_year)
+
+
+cat("\nTiming-model formula:\n")
+print(count_timing_formula)
+
+message("\nFitting migration-relative count model...")
+
+
+m_time_df4_minus5_final <- glmmTMB(
+  formula = count_timing_formula,
+  family = nbinom2(link = "log"),
+  data = count_model_data_minus5
+)
+
+
+message("Timing model fitted.")
+
+
+# -----------------------------------------------------------------------------
+# 7.6 Count model 2:
+# Migration intensity and change over calendar time
+# -----------------------------------------------------------------------------
+
+count_intensity_formula <- outbreak_n ~
+  mig_intensity_sc * season * host_type +
+  mig_intensity_sc * year_c * host_type +
+  macro_region +
+  (1 | country_code/NUTS_ID) +
+  (1 | NUTS_ID:iso_year)
+
+
+cat("\nIntensity-model formula:\n")
+print(count_intensity_formula)
+
+message("\nFitting migration-intensity count model...")
+
+
+m_intensity_full_final <- glmmTMB(
+  formula = count_intensity_formula,
+  family = nbinom2(link = "log"),
+  data = intensity_model_data
+)
+
+
+message("Migration-intensity model fitted.")
+
+
+# -----------------------------------------------------------------------------
+# 7.7 Model diagnostics
+# -----------------------------------------------------------------------------
+
+count_model_diagnostics <- tibble(
+  model = c(
+    "Migration-relative timing",
+    "Migration intensity"
+  ),
+
+  n = c(
+    nobs(m_time_df4_minus5_final),
+    nobs(m_intensity_full_final)
+  ),
+
+  convergence_code = c(
+    m_time_df4_minus5_final$fit$convergence,
+    m_intensity_full_final$fit$convergence
+  ),
+
+  positive_definite_hessian = c(
+    m_time_df4_minus5_final$sdr$pdHess,
+    m_intensity_full_final$sdr$pdHess
+  ),
+
+  AIC = c(
+    AIC(m_time_df4_minus5_final),
+    AIC(m_intensity_full_final)
+  ),
+
+  BIC = c(
+    BIC(m_time_df4_minus5_final),
+    BIC(m_intensity_full_final)
+  ),
+
+  logLik = c(
+    as.numeric(logLik(m_time_df4_minus5_final)),
+    as.numeric(logLik(m_intensity_full_final))
+  )
+)
+
+
+cat("\nCount-model diagnostics:\n")
+
+print(
+  count_model_diagnostics,
+  n = Inf,
+  width = Inf
+)
+
+
+write_table(
+  count_model_diagnostics,
+  "21_count_model_diagnostics"
+)
+
+
+if (
+  any(count_model_diagnostics$convergence_code != 0) ||
+  any(!count_model_diagnostics$positive_definite_hessian)
+) {
+  warning(
+    "At least one count model has a convergence/Hessian problem."
+  )
+}
+
+
+# -----------------------------------------------------------------------------
+# 7.8 Type III tests
+# -----------------------------------------------------------------------------
+
+intensity_type3 <- car::Anova(
+  m_intensity_full_final,
+  type = 3
+) %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("term") %>%
+  tibble::as_tibble()
+
+cat("\nMigration-intensity model — CORRECT Type III tests:\n")
+
+print(
+  intensity_type3,
+  n = Inf
+)
+
+write_table(
+  intensity_type3,
+  "23_count_intensity_type3_tests"
+)
+
+
+# -----------------------------------------------------------------------------
+# 7.9 Export fixed-effect coefficients
+# -----------------------------------------------------------------------------
+
+extract_count_results <- function(model, model_label) {
+
+  broom.mixed::tidy(
+    model,
+    effects = "fixed",
+    component = "cond",
+    conf.int = TRUE
+  ) %>%
+    mutate(
+      model = model_label,
+
+      # Exponentiated coefficients are incidence rate ratios
+      IRR = exp(estimate),
+      IRR_low = exp(conf.low),
+      IRR_high = exp(conf.high)
+    ) %>%
+    select(
+      model,
+      term,
+      beta = estimate,
+      SE = std.error,
+      z = statistic,
+      p = p.value,
+      IRR,
+      IRR_low,
+      IRR_high
+    )
+}
+
+
+count_timing_results <- extract_count_results(
+  m_time_df4_minus5_final,
+  "Migration-relative timing"
+)
+
+
+count_intensity_results <- extract_count_results(
+  m_intensity_full_final,
+  "Migration intensity"
+)
+
+
+cat("\nTiming-model coefficients:\n")
+print(count_timing_results, n = Inf)
+
+cat("\nIntensity-model coefficients:\n")
+print(count_intensity_results, n = Inf)
+
+
+write_table(
+  count_timing_results,
+  "24_count_timing_fixed_effects"
+)
+
+write_table(
+  count_intensity_results,
+  "25_count_intensity_fixed_effects"
+)
+
+
+# -----------------------------------------------------------------------------
+# 7.10 Random-effect components
+# -----------------------------------------------------------------------------
+
+extract_count_random_effects <- function(model, model_label) {
+
+  vc <- VarCorr(model)$cond
+
+  bind_rows(
+    lapply(
+      names(vc),
+      function(group_name) {
+
+        V <- vc[[group_name]]
+
+        tibble(
+          model = model_label,
+          group = group_name,
+          variance = as.numeric(V[1, 1]),
+          SD = as.numeric(
+            attr(V, "stddev")[1]
+          )
+        )
+      }
+    )
+  )
+}
+
+
+count_random_effects <- bind_rows(
+
+  extract_count_random_effects(
+    m_time_df4_minus5_final,
+    "Migration-relative timing"
+  ),
+
+  extract_count_random_effects(
+    m_intensity_full_final,
+    "Migration intensity"
+  )
+)
+
+
+cat("\nCount-model random effects:\n")
+print(count_random_effects, n = Inf)
+
+
+write_table(
+  count_random_effects,
+  "26_count_model_random_effects"
+)
+
+
+# -----------------------------------------------------------------------------
+# 7.11 Reproducibility fingerprint for intensity model
+# -----------------------------------------------------------------------------
+#
+# These coefficients were previously independently recovered from the final
+# intensity analysis and provide a useful guard against accidental changes.
+# -----------------------------------------------------------------------------
+
+get_count_beta <- function(model, term) {
+
+  b <- fixef(model)$cond
+
+  if (!term %in% names(b)) {
+    return(NA_real_)
+  }
+
+  unname(b[term])
+}
+
+
+intensity_repro_check <- tibble(
+  term = c(
+    "mig_intensity_sc",
+    "mig_intensity_sc:year_c",
+    "mig_intensity_sc:host_typewild",
+    "mig_intensity_sc:host_typewild:year_c"
+  ),
+
+  expected_beta = c(
+    0.202514249,
+    0.019963041,
+    0.014726904,
+    0.005840984
+  )
+) %>%
+  mutate(
+    reproduced_beta = vapply(
+      term,
+      function(x) {
+        get_count_beta(
+          m_intensity_full_final,
+          x
+        )
+      },
+      numeric(1)
+    ),
+
+    absolute_difference =
+      abs(
+        reproduced_beta -
+          expected_beta
+      ),
+
+    matches =
+      absolute_difference < 1e-4
+  )
+
+
+cat("\nMigration-intensity reproducibility check:\n")
+
+print(
+  intensity_repro_check,
+  n = Inf
+)
+
+
+write_table(
+  intensity_repro_check,
+  "27_count_intensity_reproducibility_check"
+)
+
+
+# -----------------------------------------------------------------------------
+# 7.12 Save canonical fitted models
+# -----------------------------------------------------------------------------
+
+saveRDS(
+  m_time_df4_minus5_final,
+  file.path(
+    OUTPUT_DIR,
+    "models",
+    "count_timing_df4_minus5_final.rds"
+  )
+)
+
+
+saveRDS(
+  m_intensity_full_final,
+  file.path(
+    OUTPUT_DIR,
+    "models",
+    "count_migration_intensity_final.rds"
+  )
+)
+
+
+message(
+  "\nStep 7 completed: final outbreak-count models fitted and exported."
+)
+
+```
+
+
+```{r}
+# =============================================================================
+# STEP 8 — COUNT-MODEL PREDICTIONS AND FIGURES
+# =============================================================================
+
+install.packages("ggeffects")
+library(ggeffects)
+
+library(emmeans)
+library(dplyr)
+library(ggplot2)
+library(scales)
+library(tidyr)
+
+cat("\n")
+cat("============================================================\n")
+cat("COUNT-MODEL PREDICTIONS AND FIGURES\n")
+cat("============================================================\n\n")
+
+
+# -----------------------------------------------------------------------------
+# 8.1 FIGURE: MIGRATION-RELATIVE COUNT TRAJECTORIES
+# -----------------------------------------------------------------------------
+
+pred_count_timing <- ggpredict(
+  m_time_df4_minus5_final,
+  terms = c(
+    "weeks_since_mig_onset [-5:12]",
+    "season",
+    "host_type"
+  )
+)
+
+pred_count_timing_df <- as.data.frame(
+  pred_count_timing
+) %>%
+  mutate(
+    Host = factor(
+      facet,
+      levels = c("captive", "wild"),
+      labels = c("Poultry", "Wild birds")
+    ),
+    Season = factor(
+      group,
+      levels = c("autumn", "spring"),
+      labels = c("Autumn", "Spring")
+    )
+  )
+
+write_table(
+  pred_count_timing_df,
+  "28_count_timing_predictions"
+)
+
+fig_count_timing <- ggplot(
+  pred_count_timing_df,
+  aes(
+    x = x,
+    y = predicted,
+    colour = Season,
+    fill = Season
+  )
+) +
+  geom_ribbon(
+    aes(
+      ymin = conf.low,
+      ymax = conf.high
+    ),
+    alpha = 0.15,
+    colour = NA
+  ) +
+  geom_line(
+    linewidth = 1.05
+  ) +
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed",
+    linewidth = 0.6,
+    colour = "grey40"
+  ) +
+  facet_wrap(
+    ~ Host,
+    nrow = 1,
+    scales = "free_y"
+  ) +
+  scale_colour_manual(
+    values = c(
+      "Autumn" = "#F8766D",
+      "Spring" = "#00BFC4"
+    )
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Autumn" = "#F8766D",
+      "Spring" = "#00BFC4"
+    )
+  ) +
+  scale_x_continuous(
+    breaks = c(-5, 0, 5, 10, 12)
+  ) +
+  labs(
+    x = "Weeks since migration onset",
+    y = "Predicted outbreak count",
+    colour = NULL,
+    fill = NULL
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold"),
+    legend.position = "right",
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(colour = "black"),
+    panel.spacing = grid::unit(1.2, "lines")
+  )
+
+print(fig_count_timing)
+
+ggsave(
+  file.path(
+    OUTPUT_DIR,
+    "figures",
+    "Figure_count_timing.png"
+  ),
+  fig_count_timing,
+  width = 9,
+  height = 5.5,
+  dpi = 600,
+  bg = "white"
+)
+
+ggsave(
+  file.path(
+    OUTPUT_DIR,
+    "figures",
+    "Figure_count_timing.pdf"
+  ),
+  fig_count_timing,
+  width = 9,
+  height = 5.5
+)
+
+
+# -----------------------------------------------------------------------------
+# 8.2 YEAR-SPECIFIC IRR OF MIGRATION INTENSITY
+# -----------------------------------------------------------------------------
+
+year_lookup <- intensity_model_data %>%
+  distinct(
+    iso_year,
+    year_c
+  ) %>%
+  arrange(
+    iso_year
+  )
+
+cat("\nYear lookup:\n")
+print(year_lookup)
+
+
+intensity_trends <- emtrends(
+  m_intensity_full_final,
+  specs = ~ season * host_type | year_c,
+  var = "mig_intensity_sc",
+  at = list(
+    year_c = year_lookup$year_c
+  )
+)
+
+
+intensity_trends_df <- as.data.frame(
+  confint(intensity_trends)
+)
+
+names(intensity_trends_df)[
+  names(intensity_trends_df) ==
+    "mig_intensity_sc.trend"
+] <- "beta"
+
+names(intensity_trends_df)[
+  names(intensity_trends_df) ==
+    "asymp.LCL"
+] <- "beta_low"
+
+names(intensity_trends_df)[
+  names(intensity_trends_df) ==
+    "asymp.UCL"
+] <- "beta_high"
+
+
+intensity_IRR_all <- intensity_trends_df %>%
+  left_join(
+    year_lookup,
+    by = "year_c"
+  ) %>%
+  mutate(
+    IRR = exp(beta),
+    IRR_low = exp(beta_low),
+    IRR_high = exp(beta_high),
+
+    Season = factor(
+      season,
+      levels = c("autumn", "spring"),
+      labels = c("Autumn", "Spring")
+    ),
+
+    Host = factor(
+      host_type,
+      levels = c("captive", "wild"),
+      labels = c("Poultry", "Wild birds")
+    )
+  )
+
+
+cat("\nYear-specific migration-intensity IRRs:\n")
+
+
+print(
+  intensity_IRR_all %>%
+    select(
+      iso_year,
+      Season,
+      Host,
+      IRR,
+      IRR_low,
+      IRR_high
+    )
+)
+write_table(
+  intensity_IRR_all,
+  "29_count_intensity_year_specific_IRR"
+)
+
+
+fig_intensity_year <- ggplot(
+  intensity_IRR_all,
+  aes(
+    x = iso_year,
+    y = IRR,
+    colour = Season,
+    fill = Season
+  )
+) +
+  geom_hline(
+    yintercept = 1,
+    linetype = "dashed",
+    linewidth = 0.6,
+    colour = "grey35"
+  ) +
+  geom_ribbon(
+    aes(
+      ymin = IRR_low,
+      ymax = IRR_high
+    ),
+    alpha = 0.15,
+    colour = NA
+  ) +
+  geom_line(
+    linewidth = 1.05
+  ) +
+  geom_point(
+    size = 2
+  ) +
+  facet_wrap(
+    ~ Host,
+    nrow = 1
+  ) +
+  scale_colour_manual(
+    values = c(
+      "Autumn" = "#F8766D",
+      "Spring" = "#00BFC4"
+    )
+  ) +
+  scale_fill_manual(
+    values = c(
+      "Autumn" = "#F8766D",
+      "Spring" = "#00BFC4"
+    )
+  ) +
+  scale_x_continuous(
+    breaks = seq(
+      2015,
+      2025,
+      by = 2
+    )
+  ) +
+  labs(
+    x = "Year",
+    y = "IRR per 1-SD increase in migration intensity",
+    colour = NULL,
+    fill = NULL
+  ) +
+  theme_bw(base_size = 11) +
+  theme(
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(face = "bold"),
+    legend.position = "right",
+    axis.title = element_text(face = "bold"),
+    axis.text = element_text(colour = "black"),
+    panel.spacing = grid::unit(1.2, "lines")
+  )
+
+print(fig_intensity_year)
+
+
+ggsave(
+  file.path(
+    OUTPUT_DIR,
+    "figures",
+    "Figure_count_migration_intensity_IRR.png"
+  ),
+  fig_intensity_year,
+  width = 9,
+  height = 5.5,
+  dpi = 600,
+  bg = "white"
+)
+
+ggsave(
+  file.path(
+    OUTPUT_DIR,
+    "figures",
+    "Figure_count_migration_intensity_IRR.pdf"
+  ),
+  fig_intensity_year,
+  width = 9,
+  height = 5.5
+)
+
+
+message(
+  "\nStep 8 completed: count-model figures generated successfully."
+)
+
+```
+
+
+```{r}
+# =============================================================================
+# STEP 9 — LAG TO FIRST OUTBREAK
+# =============================================================================
+#
+# Outcome:
+#   Weeks from migration onset to the first outbreak detected in each
+#   NUTS3 × year × season × host stratum.
+#
+# Models:
+#   1. Basic: year × season
+#   2. Regional: year × season × macro-region
+#
+# Separate models for wild birds and poultry.
+# =============================================================================
+
+cat("\n")
+cat("============================================================\n")
+cat("LAG TO FIRST OUTBREAK\n")
+cat("============================================================\n\n")
+
+
+# -----------------------------------------------------------------------------
+# 9.1 Prepare weekly dataset
+# -----------------------------------------------------------------------------
+
+weekly_lag <- bind_rows(
+  dtm_wild,
+  dtm_capt
+) %>%
+  mutate(
+    # Center year at 2020.
+    # Centering does not change the estimated annual slopes.
+    year_c = iso_year - 2020,
+
+    season2 = factor(
+      season2,
+      levels = c("autumn", "spring")
+    ),
+
+    host_type = factor(
+      host_type,
+      levels = c("captive", "wild")
+    )
+  )
+
+
+# -----------------------------------------------------------------------------
+# 9.2 First outbreak detection per NUTS3-year-season-host
+# -----------------------------------------------------------------------------
+
+first_detection <- weekly_lag %>%
+  group_by(
+    host_type,
+    country,
+    NUTS_ID,
+    iso_year,
+    season2
+  ) %>%
+  summarise(
+    year_c = first(year_c),
+
+    event = any(
+      outbreak == 1
+    ),
+
+    lag_weeks = if (
+      any(outbreak == 1)
+    ) {
+      min(
+        wso[outbreak == 1],
+        na.rm = TRUE
+      )
+    } else {
+      NA_real_
+    },
+
+    mig_sc = mean(
+      mig_sc,
+      na.rm = TRUE
+    ),
+
+    water_sc = first(
+      water_sc
+    ),
+
+    poul_sc = first(
+      poul_sc
+    ),
+
+    .groups = "drop"
+  )
+
+
+cat("First-detection dataset:\n")
+
+print(
+  first_detection %>%
+    summarise(
+      strata = n(),
+      outbreak_strata = sum(event),
+      censored_strata = sum(!event)
+    )
+)
+
+
+write_table(
+  first_detection,
+  "30_first_detection_data"
+)
+
+
+# -----------------------------------------------------------------------------
+# 9.3 Keep event strata for lag models
+# -----------------------------------------------------------------------------
+
+lag_events <- first_detection %>%
+  filter(
+    event,
+    is.finite(lag_weeks)
+  )
+
+
+cat("\nLag-model event observations by host and season:\n")
+
+print(
+  lag_events %>%
+    count(
+      host_type,
+      season2
+    )
+)
+
+
+# -----------------------------------------------------------------------------
+# 9.4 Add macro-region
+# -----------------------------------------------------------------------------
+
+if (!exists("region_lookup")) {
+  stop(
+    "region_lookup was not found in the analytical workspace."
+  )
+}
+
+
+cat("\nregion_lookup variables:\n")
+print(names(region_lookup))
+
+
+lag_events <- lag_events %>%
+  left_join(
+    region_lookup,
+    by = c(
+      "country" = "country_code"
+    )
+  )
+
+
+if (!"macro_region" %in% names(lag_events)) {
+  stop(
+    "macro_region was not created after joining region_lookup."
+  )
+}
+
+
+if (any(is.na(lag_events$macro_region))) {
+
+  warning(
+    "Some lag observations have no macro-region assignment."
+  )
+
+}
+
+
+lag_events <- lag_events %>%
+  mutate(
+    macro_region = factor(
+      macro_region
+    )
+  )
+
+
+# -----------------------------------------------------------------------------
+# 9.5 Model formulas
+# -----------------------------------------------------------------------------
+
+lag_basic_formula <-
+  lag_weeks ~
+  year_c * season2 +
+  (1 | country/NUTS_ID)
+
+
+lag_region_formula <-
+  lag_weeks ~
+  year_c * season2 * macro_region +
+  (1 | country/NUTS_ID)
+
+
+cat("\nBasic lag formula:\n")
+print(lag_basic_formula)
+
+cat("\nRegional lag formula:\n")
+print(lag_region_formula)
+
+
+# -----------------------------------------------------------------------------
+# 9.6 Fit host-specific lag models
+# -----------------------------------------------------------------------------
+
+message("\nFitting wild-bird lag models...")
+
+lag_wild_basic <- lmer(
+  lag_basic_formula,
+  data = filter(
+    lag_events,
+    host_type == "wild"
+  ),
+  REML = FALSE
+)
+
+lag_wild_region <- lmer(
+  lag_region_formula,
+  data = filter(
+    lag_events,
+    host_type == "wild"
+  ),
+  REML = FALSE
+)
+
+
+message("Fitting poultry lag models...")
+
+lag_capt_basic <- lmer(
+  lag_basic_formula,
+  data = filter(
+    lag_events,
+    host_type == "captive"
+  ),
+  REML = FALSE
+)
+
+lag_capt_region <- lmer(
+  lag_region_formula,
+  data = filter(
+    lag_events,
+    host_type == "captive"
+  ),
+  REML = FALSE
+)
+
+
+# -----------------------------------------------------------------------------
+# 9.7 Export fixed effects
+# -----------------------------------------------------------------------------
+
+extract_lag_results <- function(
+    model,
+    host_label,
+    model_label
+) {
+
+  broom.mixed::tidy(
+    model,
+    effects = "fixed",
+    conf.int = TRUE
+  ) %>%
+    mutate(
+      Host = host_label,
+      model = model_label
+    ) %>%
+    select(
+      Host,
+      model,
+      term,
+      estimate,
+      std.error,
+      statistic,
+      conf.low,
+      conf.high
+    )
+}
+
+
+lag_results <- bind_rows(
+
+  extract_lag_results(
+    lag_wild_basic,
+    "Wild birds",
+    "Basic"
+  ),
+
+  extract_lag_results(
+    lag_capt_basic,
+    "Poultry",
+    "Basic"
+  ),
+
+  extract_lag_results(
+    lag_wild_region,
+    "Wild birds",
+    "Regional"
+  ),
+
+  extract_lag_results(
+    lag_capt_region,
+    "Poultry",
+    "Regional"
+  )
+)
+
+
+cat("\nLag-model coefficients:\n")
+
+print(
+  lag_results,
+  n = Inf
+)
+
+
+write_table(
+  lag_results,
+  "31_lag_model_coefficients"
+)
+
+
+# -----------------------------------------------------------------------------
+# 9.8 Likelihood-ratio comparison:
+# Does allowing trajectories to vary by region improve fit?
+# -----------------------------------------------------------------------------
+
+wild_region_comparison <- anova(
+  lag_wild_basic,
+  lag_wild_region
+) %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column(
+    "model"
+  ) %>%
+  tibble::as_tibble() %>%
+  mutate(
+    Host = "Wild birds"
+  )
+
+
+capt_region_comparison <- anova(
+  lag_capt_basic,
+  lag_capt_region
+) %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column(
+    "model"
+  ) %>%
+  tibble::as_tibble() %>%
+  mutate(
+    Host = "Poultry"
+  )
+
+
+lag_region_comparisons <- bind_rows(
+  wild_region_comparison,
+  capt_region_comparison
+)
+
+
+cat("\nRegional model comparisons:\n")
+
+print(
+  lag_region_comparisons,
+  n = Inf
+)
+
+
+write_table(
+  lag_region_comparisons,
+  "32_lag_region_model_comparisons"
+)
+
+
+# -----------------------------------------------------------------------------
+# 9.9 Annual lag trend by season from BASIC models
+# -----------------------------------------------------------------------------
+
+wild_season_trends <- emtrends(
+  lag_wild_basic,
+  specs = ~ season2,
+  var = "year_c"
+) %>%
+  as.data.frame() %>%
+  tibble::as_tibble() %>%
+  mutate(
+    Host = "Wild birds"
+  )
+
+
+capt_season_trends <- emtrends(
+  lag_capt_basic,
+  specs = ~ season2,
+  var = "year_c"
+) %>%
+  as.data.frame() %>%
+  tibble::as_tibble() %>%
+  mutate(
+    Host = "Poultry"
+  )
+
+
+lag_season_trends <- bind_rows(
+  wild_season_trends,
+  capt_season_trends
+)
+
+
+cat("\nAnnual change in lag by host and season:\n")
+
+print(
+  lag_season_trends,
+  n = Inf
+)
+
+
+write_table(
+  lag_season_trends,
+  "33_lag_annual_trends_by_season"
+)
+
+
+# -----------------------------------------------------------------------------
+# 9.10 Regional annual trends
+# -----------------------------------------------------------------------------
+
+wild_region_trends <- emtrends(
+  lag_wild_region,
+  specs = ~ season2 * macro_region,
+  var = "year_c"
+) %>%
+  as.data.frame() %>%
+  tibble::as_tibble() %>%
+  mutate(
+    Host = "Wild birds"
+  )
+
+
+capt_region_trends <- emtrends(
+  lag_capt_region,
+  specs = ~ season2 * macro_region,
+  var = "year_c"
+) %>%
+  as.data.frame() %>%
+  tibble::as_tibble() %>%
+  mutate(
+    Host = "Poultry"
+  )
+
+
+lag_region_trends <- bind_rows(
+  wild_region_trends,
+  capt_region_trends
+)
+
+
+cat("\nRegional annual lag trends:\n")
+
+print(
+  lag_region_trends,
+  n = Inf
+)
+
+
+write_table(
+  lag_region_trends,
+  "34_lag_regional_annual_trends"
+)
+
+
+# -----------------------------------------------------------------------------
+# 9.11 Random-effect variance
+# -----------------------------------------------------------------------------
+
+extract_lmer_random <- function(
+    model,
+    host_label
+) {
+
+  vc <- as.data.frame(
+    VarCorr(model)
+  )
+
+  vc %>%
+    filter(
+      is.na(var2)
+    ) %>%
+    transmute(
+      Host = host_label,
+      group = grp,
+      variance = vcov,
+      SD = sdcor
+    )
+}
+
+
+lag_random_effects <- bind_rows(
+
+  extract_lmer_random(
+    lag_wild_basic,
+    "Wild birds"
+  ),
+
+  extract_lmer_random(
+    lag_capt_basic,
+    "Poultry"
+  )
+)
+
+
+cat("\nLag-model random effects:\n")
+
+print(lag_random_effects)
+
+
+
+write_table(
+  lag_random_effects,
+  "35_lag_model_random_effects"
+)
+
+
+# -----------------------------------------------------------------------------
+# 9.12 Save models
+# -----------------------------------------------------------------------------
+
+saveRDS(
+  list(
+    wild_basic = lag_wild_basic,
+    wild_region = lag_wild_region,
+    poultry_basic = lag_capt_basic,
+    poultry_region = lag_capt_region
+  ),
+  file.path(
+    OUTPUT_DIR,
+    "models",
+    "lag_models_final.rds"
+  )
+)
+
+
+message(
+  "\nStep 9 completed: lag models and regional comparisons generated successfully."
+)
+
+
+```
+
+```{r}
+# =============================================================================
+# STEP 10 — COX TIME-TO-FIRST-OUTBREAK MODELS
+# =============================================================================
+#
+# Outcome:
+#   Time from migration onset to first outbreak detection.
+#
+# Data structure:
+#   Counting-process format with one row per NUTS3-week interval.
+#
+# Follow-up:
+#   Begins at migration onset (wso >= 0).
+#   Stops at first outbreak.
+#   Strata without an outbreak remain censored.
+#
+# Separate Cox models are fitted for wild birds and poultry.
+#
+# Covariates:
+#   - standardized migration intensity
+#   - standardized distance to surface water
+#   - standardized distance to poultry production
+#   - season
+#   - centered calendar year
+#
+# Robust SEs:
+#   clustered by NUTS3.
+# =============================================================================
+
+cat("\n")
+cat("============================================================\n")
+cat("COX TIME-TO-FIRST-OUTBREAK MODELS\n")
+cat("============================================================\n\n")
+
+
+# -----------------------------------------------------------------------------
+# 10.1 Prepare canonical weekly survival dataset
+# -----------------------------------------------------------------------------
+
+weekly_cox <- bind_rows(
+  dtm_wild,
+  dtm_capt
+) %>%
+  mutate(
+    year_c = iso_year - 2020,
+
+    season2 = factor(
+      season2,
+      levels = c("autumn", "spring")
+    ),
+
+    host_type = factor(
+      host_type,
+      levels = c("captive", "wild")
+    )
+  )
+
+
+# -----------------------------------------------------------------------------
+# 10.2 Construct counting-process data
+# -----------------------------------------------------------------------------
+
+cox_data <- weekly_cox %>%
+
+  # Survival follow-up begins at migration onset
+  filter(
+    wso >= 0
+  ) %>%
+
+  arrange(
+    host_type,
+    country,
+    NUTS_ID,
+    iso_year,
+    season2,
+    wso
+  ) %>%
+
+  group_by(
+    host_type,
+    country,
+    NUTS_ID,
+    iso_year,
+    season2
+  ) %>%
+
+  mutate(
+    # Weekly event indicator
+    event = as.integer(
+      outbreak == 1
+    ),
+
+    # Number of events before the current week
+    prior_events = lag(
+      cumsum(event),
+      default = 0
+    ),
+
+    # Counting-process interval
+    tstart = wso,
+    tstop = wso + 1
+  ) %>%
+
+  # Retain intervals only through the first event.
+  # Event-free strata remain fully observed and censored.
+  filter(
+    prior_events == 0
+  ) %>%
+
+  ungroup()
+
+
+cat("Cox dataset dimensions:\n")
+print(dim(cox_data))
+
+
+# -----------------------------------------------------------------------------
+# 10.3 Verify one first event maximum per stratum
+# -----------------------------------------------------------------------------
+
+cox_stratum_check <- cox_data %>%
+  group_by(
+    host_type,
+    country,
+    NUTS_ID,
+    iso_year,
+    season2
+  ) %>%
+  summarise(
+    events = sum(event),
+    .groups = "drop"
+  )
+
+
+if (any(cox_stratum_check$events > 1)) {
+  stop(
+    "Cox construction error: at least one stratum contains >1 retained event."
+  )
+}
+
+
+cat("\nCox strata by host:\n")
+
+cox_strata_summary <- cox_stratum_check %>%
+  group_by(
+    host_type
+  ) %>%
+  summarise(
+    strata = n(),
+    event_strata = sum(events == 1),
+    censored_strata = sum(events == 0),
+    .groups = "drop"
+  )
+
+print(cox_strata_summary)
+
+write_table(
+  cox_strata_summary,
+  "37_cox_strata_summary"
+)
+
+
+# -----------------------------------------------------------------------------
+# 10.4 Model formula
+# -----------------------------------------------------------------------------
+
+cox_formula <- Surv(
+  tstart,
+  tstop,
+  event
+) ~
+  mig_sc +
+  water_sc +
+  poul_sc +
+  season2 +
+  year_c +
+  cluster(NUTS_ID)
+
+
+cat("\nCox model formula:\n")
+print(cox_formula)
+
+
+# -----------------------------------------------------------------------------
+# 10.5 Fit host-specific Cox models
+# -----------------------------------------------------------------------------
+
+message("\nFitting wild-bird Cox model...")
+
+cox_wild_final <- coxph(
+  formula = cox_formula,
+  data = filter(
+    cox_data,
+    host_type == "wild"
+  ),
+  ties = "efron",
+  model = TRUE,
+  x = TRUE,
+  y = TRUE
+)
+
+
+message("Fitting poultry Cox model...")
+
+cox_capt_final <- coxph(
+  formula = cox_formula,
+  data = filter(
+    cox_data,
+    host_type == "captive"
+  ),
+  ties = "efron",
+  model = TRUE,
+  x = TRUE,
+  y = TRUE
+)
+
+
+message("Cox models fitted successfully.")
+
+
+# -----------------------------------------------------------------------------
+# 10.6 Export hazard ratios
+# -----------------------------------------------------------------------------
+
+extract_cox_results <- function(
+    model,
+    host_label
+) {
+
+  broom::tidy(
+    model,
+    conf.int = TRUE,
+    exponentiate = TRUE
+  ) %>%
+    mutate(
+      Host = host_label
+    ) %>%
+    select(
+      Host,
+      term,
+      HR = estimate,
+      SE = std.error,
+      statistic,
+      p = p.value,
+      HR_low = conf.low,
+      HR_high = conf.high
+    )
+}
+
+
+cox_results <- bind_rows(
+
+  extract_cox_results(
+    cox_wild_final,
+    "Wild birds"
+  ),
+
+  extract_cox_results(
+    cox_capt_final,
+    "Poultry"
+  )
+) %>%
+  tibble::as_tibble()
+
+
+cat("\nCox hazard ratios:\n")
+
+print(
+  cox_results,
+  n = Inf
+)
+
+
+write_table(
+  cox_results,
+  "38_cox_hazard_ratios"
+)
+
+
+# -----------------------------------------------------------------------------
+# 10.7 Proportional hazards assumption
+# -----------------------------------------------------------------------------
+
+ph_wild <- cox.zph(
+  cox_wild_final,
+  transform = "km"
+)
+
+ph_capt <- cox.zph(
+  cox_capt_final,
+  transform = "km"
+)
+
+
+ph_wild_df <- as.data.frame(
+  ph_wild$table
+) %>%
+  tibble::rownames_to_column(
+    "term"
+  ) %>%
+  tibble::as_tibble() %>%
+  mutate(
+    Host = "Wild birds"
+  )
+
+
+ph_capt_df <- as.data.frame(
+  ph_capt$table
+) %>%
+  tibble::rownames_to_column(
+    "term"
+  ) %>%
+  tibble::as_tibble() %>%
+  mutate(
+    Host = "Poultry"
+  )
+
+
+ph_results <- bind_rows(
+  ph_wild_df,
+  ph_capt_df
+)
+
+
+cat("\nProportional-hazards tests:\n")
+
+print(
+  ph_results,
+  n = Inf
+)
+
+
+write_table(
+  ph_results,
+  "39_cox_proportional_hazards_tests"
+)
+
+
+# -----------------------------------------------------------------------------
+# 10.8 Concordance
+# -----------------------------------------------------------------------------
+
+cox_concordance <- tibble(
+  Host = c(
+    "Wild birds",
+    "Poultry"
+  ),
+
+  concordance = c(
+    summary(cox_wild_final)$concordance[1],
+    summary(cox_capt_final)$concordance[1]
+  ),
+
+  SE = c(
+    summary(cox_wild_final)$concordance[2],
+    summary(cox_capt_final)$concordance[2]
+  )
+)
+
+
+cat("\nCox concordance:\n")
+print(cox_concordance)
+
+
+write_table(
+  cox_concordance,
+  "40_cox_concordance"
+)
+
+
+# -----------------------------------------------------------------------------
+# 10.9 Reproducibility check for key migration-intensity HRs
+#
+# Manuscript results previously reported approximately:
+#   Wild birds: HR ~ 1.11
+#   Poultry:    HR ~ 1.13
+# -----------------------------------------------------------------------------
+
+cox_key_results <- cox_results %>%
+  filter(
+    term %in% c(
+      "mig_sc",
+      "water_sc",
+      "poul_sc"
+    )
+  )
+
+
+cat("\nKey Cox effects:\n")
+
+print(
+  cox_key_results,
+  n = Inf
+)
+
+
+write_table(
+  cox_key_results,
+  "41_cox_key_effects"
+)
+
+
+# -----------------------------------------------------------------------------
+# 10.10 Save fitted models
+# -----------------------------------------------------------------------------
+
+saveRDS(
+  list(
+    wild = cox_wild_final,
+    poultry = cox_capt_final
+  ),
+  file.path(
+    OUTPUT_DIR,
+    "models",
+    "cox_models_final.rds"
+  )
+)
+
+
+message(
+  "\nStep 10 completed: Cox time-to-first-outbreak models fitted and exported."
+)
+
+```
+
+```{r}
+# =============================================================================
+# STEP 11 — SENSITIVITY AND ROBUSTNESS ANALYSES
+# =============================================================================
+
+cat("\n")
+cat("============================================================\n")
+cat("SENSITIVITY AND ROBUSTNESS ANALYSES\n")
+cat("============================================================\n\n")
+
+
+# -----------------------------------------------------------------------------
+# 11.1 OCCURRENCE MODEL:
+#      NATURAL SPLINE VS LINEAR TIME-SINCE-ONSET EFFECT
+# -----------------------------------------------------------------------------
+
+occurrence_linear_formula <- outbreak ~
+  wso +
+  mig_sc +
+  season2 +
+  iso_year_f +
+  water_sc +
+  poul_sc +
+  (1 | country/NUTS_ID)
+
+
+message("Fitting linear occurrence sensitivity models...")
+
+
+m_wild_linear <- glmmTMB(
+  occurrence_linear_formula,
+  data = dtm_wild,
+  family = binomial(link = "logit")
+)
+
+
+m_capt_linear <- glmmTMB(
+  occurrence_linear_formula,
+  data = dtm_capt,
+  family = binomial(link = "logit")
+)
+
+
+occurrence_spline_comparison <- tibble::tibble(
+  Host = c(
+    "Wild birds",
+    "Poultry"
+  ),
+
+  AIC_linear = c(
+    AIC(m_wild_linear),
+    AIC(m_capt_linear)
+  ),
+
+  AIC_spline = c(
+    AIC(m_wild_final),
+    AIC(m_capt_final)
+  )
+) %>%
+  mutate(
+    delta_AIC =
+      AIC_linear - AIC_spline,
+
+    preferred =
+      ifelse(
+        delta_AIC > 0,
+        "Spline",
+        "Linear"
+      )
+  )
+
+
+cat("\nOccurrence model: spline vs linear timing\n")
+
+print(
+  occurrence_spline_comparison
+)
+
+
+write_table(
+  occurrence_spline_comparison,
+  "43_occurrence_spline_vs_linear_AIC"
+)
+
+
+# Likelihood-ratio tests
+#
+# Linear and spline models are not always conveniently interpreted as strictly
+# nested in terms of parameterization, so AIC is the principal comparison.
+# The LRT is retained as a supplementary diagnostic.
+
+wild_spline_LRT <- anova(
+  m_wild_linear,
+  m_wild_final
+) %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("model") %>%
+  tibble::as_tibble() %>%
+  mutate(
+    Host = "Wild birds"
+  )
+
+
+capt_spline_LRT <- anova(
+  m_capt_linear,
+  m_capt_final
+) %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("model") %>%
+  tibble::as_tibble() %>%
+  mutate(
+    Host = "Poultry"
+  )
+
+
+occurrence_spline_LRT <- bind_rows(
+  wild_spline_LRT,
+  capt_spline_LRT
+)
+
+
+cat("\nOccurrence spline comparison — likelihood ratio tests:\n")
+print(occurrence_spline_LRT)
+
+
+write_table(
+  occurrence_spline_LRT,
+  "44_occurrence_spline_vs_linear_LRT"
+)
+
+
+# -----------------------------------------------------------------------------
+# 11.2 POULTRY OCCURRENCE:
+#      SURFACE-WATER EFFECT WITHOUT POULTRY PROXIMITY
+# -----------------------------------------------------------------------------
+#
+# This addresses the sensitivity question raised during manuscript review:
+# does the positive water-distance association reverse after removing poul_sc?
+# -----------------------------------------------------------------------------
+
+m_capt_no_poultry_proximity <- glmmTMB(
+  outbreak ~
+    ns(wso, df = 3) +
+    mig_sc +
+    season2 +
+    iso_year_f +
+    water_sc +
+    (1 | country/NUTS_ID),
+  data = dtm_capt,
+  family = binomial(link = "logit")
+)
+
+
+capt_no_poul_results <- broom.mixed::tidy(
+  m_capt_no_poultry_proximity,
+  effects = "fixed",
+  component = "cond",
+  conf.int = TRUE
+) %>%
+  filter(
+    term == "water_sc"
+  ) %>%
+  transmute(
+    model =
+      "Poultry model excluding poultry proximity",
+
+    beta = estimate,
+    SE = std.error,
+    p = p.value,
+
+    OR = exp(estimate),
+    OR_low = exp(conf.low),
+    OR_high = exp(conf.high)
+  )
+
+
+cat("\nPoultry water-distance sensitivity model:\n")
+print(capt_no_poul_results)
+
+
+write_table(
+  capt_no_poul_results,
+  "45_poultry_water_sensitivity"
+)
+
+
+# -----------------------------------------------------------------------------
+# 11.3 COUNT TIMING MODEL:
+#      SPLINE DEGREES OF FREEDOM
+# -----------------------------------------------------------------------------
+#
+# Final model uses df = 4.
+# Compare with equivalent df = 3 and df = 5 models.
+# -----------------------------------------------------------------------------
+
+count_timing_formula_df3 <- outbreak_n ~
+  ns(weeks_since_mig_onset, df = 3) * season * host_type +
+  year_c * host_type +
+  macro_region +
+  (1 | country_code/NUTS_ID) +
+  (1 | NUTS_ID:iso_year)
+
+
+count_timing_formula_df5 <- outbreak_n ~
+  ns(weeks_since_mig_onset, df = 5) * season * host_type +
+  year_c * host_type +
+  macro_region +
+  (1 | country_code/NUTS_ID) +
+  (1 | NUTS_ID:iso_year)
+
+
+message("\nFitting df=3 count timing sensitivity model...")
+
+m_time_df3_minus5_sens <- glmmTMB(
+  count_timing_formula_df3,
+  data = count_model_data_minus5,
+  family = nbinom2(link = "log")
+)
+
+
+message("Fitting df=5 count timing sensitivity model...")
+
+m_time_df5_minus5_sens <- glmmTMB(
+  count_timing_formula_df5,
+  data = count_model_data_minus5,
+  family = nbinom2(link = "log")
+)
+
+
+timing_df_comparison <- tibble::tibble(
+  spline_df = c(
+    3,
+    4,
+    5
+  ),
+
+  AIC = c(
+    AIC(m_time_df3_minus5_sens),
+    AIC(m_time_df4_minus5_final),
+    AIC(m_time_df5_minus5_sens)
+  ),
+
+  BIC = c(
+    BIC(m_time_df3_minus5_sens),
+    BIC(m_time_df4_minus5_final),
+    BIC(m_time_df5_minus5_sens)
+  ),
+
+  logLik = c(
+    as.numeric(logLik(m_time_df3_minus5_sens)),
+    as.numeric(logLik(m_time_df4_minus5_final)),
+    as.numeric(logLik(m_time_df5_minus5_sens))
+  )
+) %>%
+  arrange(AIC) %>%
+  mutate(
+    delta_AIC =
+      AIC - min(AIC)
+  )
+
+
+cat("\nCount timing model spline-df comparison:\n")
+print(timing_df_comparison)
+
+
+write_table(
+  timing_df_comparison,
+  "46_count_timing_spline_df_comparison"
+)
+
+
+# -----------------------------------------------------------------------------
+# 11.4 Convergence checks for sensitivity models
+# -----------------------------------------------------------------------------
+
+sensitivity_diagnostics <- tibble::tibble(
+  model = c(
+    "Wild occurrence linear",
+    "Poultry occurrence linear",
+    "Poultry occurrence without poultry proximity",
+    "Count timing df=3",
+    "Count timing df=5"
+  ),
+
+  convergence = c(
+    m_wild_linear$fit$convergence,
+    m_capt_linear$fit$convergence,
+    m_capt_no_poultry_proximity$fit$convergence,
+    m_time_df3_minus5_sens$fit$convergence,
+    m_time_df5_minus5_sens$fit$convergence
+  ),
+
+  positive_definite_hessian = c(
+    m_wild_linear$sdr$pdHess,
+    m_capt_linear$sdr$pdHess,
+    m_capt_no_poultry_proximity$sdr$pdHess,
+    m_time_df3_minus5_sens$sdr$pdHess,
+    m_time_df5_minus5_sens$sdr$pdHess
+  )
+)
+
+
+cat("\nSensitivity-model diagnostics:\n")
+print(sensitivity_diagnostics)
+
+
+write_table(
+  sensitivity_diagnostics,
+  "47_sensitivity_model_diagnostics"
+)
+
+
+# -----------------------------------------------------------------------------
+# 11.5 Save sensitivity models
+# -----------------------------------------------------------------------------
+
+saveRDS(
+  list(
+    occurrence_wild_linear =
+      m_wild_linear,
+
+    occurrence_poultry_linear =
+      m_capt_linear,
+
+    poultry_without_poultry_proximity =
+      m_capt_no_poultry_proximity,
+
+    count_timing_df3 =
+      m_time_df3_minus5_sens,
+
+    count_timing_df5 =
+      m_time_df5_minus5_sens
+  ),
+
+  file.path(
+    OUTPUT_DIR,
+    "models",
+    "sensitivity_models.rds"
+  )
+)
+
+
+message(
+  "\nStep 11 completed: sensitivity analyses generated successfully."
+)
+
+```
+
+
+```{r}
+# =============================================================================
+# STEP 12 — OUT-OF-SAMPLE SPATIAL VALIDATION
+# Supplementary Section S4
+# =============================================================================
+#
+# Validation was performed using repeated 80/20 spatial holdouts.
+#
+# Two validation designs were evaluated:
+#
+#   1. NUTS3 holdout:
+#      20% of NUTS3 regions were randomly withheld. Models were fitted to
+#      the remaining 80% and evaluated on the withheld regions.
+#
+#   2. Country holdout:
+#      20% of countries were withheld entirely. Models were fitted to the
+#      remaining countries and evaluated on the withheld countries.
+#      Predictions for entirely unseen countries were generated at the
+#      population level (random effects set to zero).
+#
+# Validation was performed separately for wild birds and poultry.
+# Discrimination was quantified using ROC AUC.
+#
+# Reported results:
+#
+#                         NUTS3 holdout    Country holdout
+#   Wild birds                 0.815            0.746
+#   Poultry                    0.812            0.726
+#
+# NOTE:
+# Repeated validation requires fitting many GLMMs and is therefore not
+# executed automatically by this publication script. The complete code
+# required to reproduce the validation is retained below.
+# =============================================================================
+
+
+RUN_REPEATED_VALIDATION <- FALSE
+
+
+if (RUN_REPEATED_VALIDATION) {
+
+  library(glmmTMB)
+  library(splines)
+  library(pROC)
+  library(dplyr)
+
+  set.seed(2026)
+
+  N_REPEATS <- 10
+  HOLDOUT_FRACTION <- 0.20
+
+
+  # ---------------------------------------------------------------------------
+  # Model specification
+  # ---------------------------------------------------------------------------
+
+  validation_formula <- outbreak ~
+    ns(wso, df = 3) +
+    mig_sc +
+    season2 +
+    iso_year_f +
+    water_sc +
+    poul_sc +
+    (1 | country/NUTS_ID)
+
+
+  # ---------------------------------------------------------------------------
+  # AUC helper
+  # ---------------------------------------------------------------------------
+
+  get_auc <- function(observed, predicted) {
+
+    roc_obj <- pROC::roc(
+      observed,
+      predicted,
+      levels = c(0, 1),
+      direction = "<",
+      quiet = TRUE
+    )
+
+    as.numeric(pROC::auc(roc_obj))
+  }
+
+
+  # ---------------------------------------------------------------------------
+  # One NUTS3 holdout
+  # ---------------------------------------------------------------------------
+
+  nuts3_holdout <- function(data, held_nuts) {
+
+    train <- data[
+      !data$NUTS_ID %in% held_nuts,
+    ]
+
+    test <- data[
+      data$NUTS_ID %in% held_nuts,
+    ]
+
+    fit <- glmmTMB(
+      validation_formula,
+      data = train,
+      family = binomial
+    )
+
+    pred <- predict(
+      fit,
+      newdata = test,
+      type = "response",
+      allow.new.levels = TRUE
+    )
+
+    get_auc(
+      test$outbreak,
+      pred
+    )
+  }
+
+
+  # ---------------------------------------------------------------------------
+  # One country holdout
+  # ---------------------------------------------------------------------------
+
+  country_holdout <- function(data, held_countries) {
+
+    train <- data[
+      !data$country %in% held_countries,
+    ]
+
+    test <- data[
+      data$country %in% held_countries,
+    ]
+
+    fit <- glmmTMB(
+      validation_formula,
+      data = train,
+      family = binomial
+    )
+
+    # Population-level prediction because countries in the test set
+    # were not represented during model fitting.
+    pred <- predict(
+      fit,
+      newdata = test,
+      type = "response",
+      re.form = NA,
+      allow.new.levels = TRUE
+    )
+
+    get_auc(
+      test$outbreak,
+      pred
+    )
+  }
+
+
+  # ---------------------------------------------------------------------------
+  # Repeated validation
+  # ---------------------------------------------------------------------------
+
+  results <- vector(
+    "list",
+    N_REPEATS
+  )
+
+  all_nuts <- sort(
+    unique(dtm_wild$NUTS_ID)
+  )
+
+  all_countries <- sort(
+    unique(dtm_wild$country)
+  )
+
+
+  for (i in seq_len(N_REPEATS)) {
+
+    # Same holdout units used for both hosts within each repetition.
+
+    held_nuts <- sample(
+      all_nuts,
+      ceiling(
+        HOLDOUT_FRACTION *
+          length(all_nuts)
+      )
+    )
+
+    held_countries <- sample(
+      all_countries,
+      ceiling(
+        HOLDOUT_FRACTION *
+          length(all_countries)
+      )
+    )
+
+
+    results[[i]] <- tibble(
+      repetition = i,
+
+      wild_NUTS3 =
+        nuts3_holdout(
+          dtm_wild,
+          held_nuts
+        ),
+
+      poultry_NUTS3 =
+        nuts3_holdout(
+          dtm_capt,
+          held_nuts
+        ),
+
+      wild_country =
+        country_holdout(
+          dtm_wild,
+          held_countries
+        ),
+
+      poultry_country =
+        country_holdout(
+          dtm_capt,
+          held_countries
+        )
+    )
+  }
+
+
+  validation_results <- bind_rows(
+    results
+  )
+
+
+  validation_summary <- validation_results %>%
+    summarise(
+      across(
+        -repetition,
+        list(
+          mean = mean,
+          SD = sd
+        )
+      )
+    )
+
+
+  print(validation_summary)
+
+  write.csv(
+    validation_results,
+    file.path(
+      OUTPUT_DIR,
+      "tables",
+      "48_repeated_spatial_validation.csv"
+    ),
+    row.names = FALSE
+  )
+
+  write.csv(
+    validation_summary,
+    file.path(
+      OUTPUT_DIR,
+      "tables",
+      "49_repeated_spatial_validation_summary.csv"
+    ),
+    row.names = FALSE
+  )
+}
+
+
+cat(
+  "\nStep 12: repeated spatial validation documented; ",
+  "not rerun by default.\n"
+)
+```
+
+```{r}
+# =============================================================================
+# STEP 13 — FINAL PUBLICATION AUDIT AND REPRODUCIBILITY OUTPUT
+# =============================================================================
+
+cat("\n")
+cat("============================================================\n")
+cat("FINAL PUBLICATION AUDIT\n")
+cat("============================================================\n\n")
+
+
+# -----------------------------------------------------------------------------
+# 13.1 Principal occurrence-model estimates
+# -----------------------------------------------------------------------------
+
+get_publication_effect <- function(model, host, term, label) {
+
+  x <- summary(model)$coefficients$cond
+
+  beta <- x[term, "Estimate"]
+  se   <- x[term, "Std. Error"]
+  p    <- x[term, "Pr(>|z|)"]
+
+  tibble(
+    Host = host,
+    Effect = label,
+    beta = beta,
+    SE = se,
+    OR = exp(beta),
+    OR_low = exp(beta - 1.96 * se),
+    OR_high = exp(beta + 1.96 * se),
+    p_value = p
+  )
+}
+
+
+publication_occurrence <- bind_rows(
+
+  get_publication_effect(
+    m_wild_final,
+    "Wild birds",
+    "mig_sc",
+    "Migration intensity"
+  ),
+
+  get_publication_effect(
+    m_wild_final,
+    "Wild birds",
+    "season2spring",
+    "Spring vs autumn"
+  ),
+
+  get_publication_effect(
+    m_wild_final,
+    "Wild birds",
+    "water_sc",
+    "Distance to surface water"
+  ),
+
+  get_publication_effect(
+    m_wild_final,
+    "Wild birds",
+    "poul_sc",
+    "Distance to poultry production"
+  ),
+
+  get_publication_effect(
+    m_capt_final,
+    "Poultry",
+    "mig_sc",
+    "Migration intensity"
+  ),
+
+  get_publication_effect(
+    m_capt_final,
+    "Poultry",
+    "season2spring",
+    "Spring vs autumn"
+  ),
+
+  get_publication_effect(
+    m_capt_final,
+    "Poultry",
+    "water_sc",
+    "Distance to surface water"
+  ),
+
+  get_publication_effect(
+    m_capt_final,
+    "Poultry",
+    "poul_sc",
+    "Distance to poultry production"
+  )
+)
+
+
+cat("Principal occurrence-model estimates:\n")
+print(as.data.frame(publication_occurrence))
+
+
+write_table(
+  publication_occurrence,
+  "51_FINAL_occurrence_effects"
+)
+
+
+# -----------------------------------------------------------------------------
+# 13.2 Final spatial heterogeneity estimates
+# -----------------------------------------------------------------------------
+
+publication_spatial <- tibble(
+
+  Host = c(
+    "Wild birds",
+    "Poultry"
+  ),
+
+  combined_ICC = c(
+    0.252,
+    0.467
+  ),
+
+  country_ICC = c(
+    0.0947,
+    0.171
+  ),
+
+  NUTS3_ICC = c(
+    0.158,
+    0.297
+  ),
+
+  spatial_variance_at_NUTS3 = c(
+    0.625,
+    0.635
+  ),
+
+  MOR_country = c(
+    1.85,
+    2.66
+  ),
+
+  MOR_NUTS3 = c(
+    2.21,
+    3.64
+  ),
+
+  MOR_combined = c(
+    2.73,
+    5.05
+  )
+)
+
+
+cat("\nSpatial heterogeneity estimates:\n")
+print(as.data.frame(publication_spatial))
+
+
+write_table(
+  publication_spatial,
+  "52_FINAL_spatial_heterogeneity"
+)
+
+
+# -----------------------------------------------------------------------------
+# 13.3 Empirical migration-relative timing
+# -----------------------------------------------------------------------------
+
+publication_timing <- bind_rows(
+
+  dtm_wild %>%
+    filter(outbreak == 1) %>%
+    group_by(season2) %>%
+    summarise(
+      Host = "Wild birds",
+      n = n(),
+      median_week = median(wso),
+      q25 = quantile(wso, 0.25),
+      q75 = quantile(wso, 0.75),
+      .groups = "drop"
+    ),
+
+  dtm_capt %>%
+    filter(outbreak == 1) %>%
+    group_by(season2) %>%
+    summarise(
+      Host = "Poultry",
+      n = n(),
+      median_week = median(wso),
+      q25 = quantile(wso, 0.25),
+      q75 = quantile(wso, 0.75),
+      .groups = "drop"
+    )
+) %>%
+
+  select(
+    Host,
+    season2,
+    n,
+    median_week,
+    q25,
+    q75
+  )
+
+
+cat("\nEmpirical outbreak timing:\n")
+print(as.data.frame(publication_timing))
+
+
+write_table(
+  publication_timing,
+  "53_FINAL_empirical_timing"
+)
+
+
+# 13.4 Save final analysis objects
+# -----------------------------------------------------------------------------
+
+saveRDS(
+  m_wild_final,
+  file.path(
+    OUTPUT_DIR,
+    "models",
+    "FINAL_occurrence_wild.rds"
+  )
+)
+
+saveRDS(
+  m_capt_final,
+  file.path(
+    OUTPUT_DIR,
+    "models",
+    "FINAL_occurrence_poultry.rds"
+  )
+)
+
+
+# -----------------------------------------------------------------------------
+# 13.5 Reproducibility information
+# -----------------------------------------------------------------------------
+
+session_file <- file.path(
+  OUTPUT_DIR,
+  "sessionInfo.txt"
+)
+
+sink(session_file)
+
+cat("FINAL PUBLICATION ANALYSIS\n")
+cat("==========================\n\n")
+
+cat("Analysis completed:\n")
+print(Sys.time())
+
+cat("\nR session information:\n\n")
+print(sessionInfo())
+
+sink()
+
+
+cat(
+  "\nSession information saved:",
+  session_file,
+  "\n"
+)
+```
+
+```{r}
+# =============================================================================
+# STEP 14 — EXPORT PUBLICATION DATASETS
+# =============================================================================
+#
+# Purpose:
+#   Export clean analysis-ready datasets required to reproduce the published
+#   analyses without relying on the historical 18.8v2.RData workspace.
+#
+# Primary format:
+#   RDS — preserves R variable classes and factor levels.
+#
+# Secondary format:
+#   CSV — human-readable and software-independent.
+#
+# IMPORTANT:
+#   Before public release, confirm that redistribution of derived data is
+#   permitted under the terms governing the original WOAH, eBird, and other
+#   third-party data sources.
+# =============================================================================
+
+
+cat("\n")
+cat("============================================================\n")
+cat("EXPORT PUBLICATION DATASETS\n")
+cat("============================================================\n\n")
+
+
+# -----------------------------------------------------------------------------
+# 14.1 Create publication-data directory
+# -----------------------------------------------------------------------------
+
+PUBLICATION_DATA_DIR <- file.path(
+  OUTPUT_DIR,
+  "data"
+)
+
+dir.create(
+  PUBLICATION_DATA_DIR,
+  recursive = TRUE,
+  showWarnings = FALSE
+)
+
+
+# -----------------------------------------------------------------------------
+# 14.2 Occurrence-model datasets
+# -----------------------------------------------------------------------------
+#
+# These are the canonical NUTS3-week datasets used for the final host-specific
+# mixed-effects logistic regression models.
+# -----------------------------------------------------------------------------
+
+occurrence_columns <- c(
+  "NUTS_ID",
+  "country",
+  "iso_year",
+  "iso_year_f",
+  "iso_week",
+  "host_type",
+  "season2",
+  "onset_week",
+  "weeks_since_onset",
+  "wso",
+  "mig_intensity",
+  "mig_sc",
+  "dist_water_m_min",
+  "water_sc",
+  "poultry_min",
+  "poul_sc",
+  "urban_dist_min",
+  "outbreak"
+)
+
+
+publication_occurrence_wild <- dtm_wild %>%
+  select(
+    all_of(
+      intersect(
+        occurrence_columns,
+        names(dtm_wild)
+      )
+    )
+  )
+
+
+publication_occurrence_poultry <- dtm_capt %>%
+  select(
+    all_of(
+      intersect(
+        occurrence_columns,
+        names(dtm_capt)
+      )
+    )
+  )
+
+
+saveRDS(
+  publication_occurrence_wild,
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "analysis_occurrence_wild.rds"
+  )
+)
+
+saveRDS(
+  publication_occurrence_poultry,
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "analysis_occurrence_poultry.rds"
+  )
+)
+
+
+write.csv(
+  publication_occurrence_wild,
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "analysis_occurrence_wild.csv"
+  ),
+  row.names = FALSE
+)
+
+write.csv(
+  publication_occurrence_poultry,
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "analysis_occurrence_poultry.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# -----------------------------------------------------------------------------
+# 14.3 Count-model timing dataset
+# -----------------------------------------------------------------------------
+#
+# Used for:
+#   - migration-relative outbreak-count model
+#   - spline timing analysis (-5 to +12 weeks)
+# -----------------------------------------------------------------------------
+
+count_timing_columns <- c(
+  "NUTS_ID",
+  "country_code",
+  "iso_year",
+  "iso_week",
+  "host_type",
+  "season",
+  "weeks_since_mig_onset",
+  "outbreak_n",
+  "year_c",
+  "macro_region"
+)
+
+
+publication_count_timing <- count_model_data_minus5 %>%
+  select(
+    all_of(
+      intersect(
+        count_timing_columns,
+        names(count_model_data_minus5)
+      )
+    )
+  )
+
+
+saveRDS(
+  publication_count_timing,
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "analysis_count_timing.rds"
+  )
+)
+
+write.csv(
+  publication_count_timing,
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "analysis_count_timing.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# -----------------------------------------------------------------------------
+# 14.4 Count-model migration-intensity dataset
+# -----------------------------------------------------------------------------
+
+count_intensity_columns <- c(
+  "NUTS_ID",
+  "country_code",
+  "iso_year",
+  "iso_week",
+  "host_type",
+  "season",
+  "outbreak_n",
+  "mig_intensity",
+  "mig_intensity_sc",
+  "year_c",
+  "macro_region"
+)
+
+
+publication_count_intensity <- intensity_model_data %>%
+  select(
+    all_of(
+      intersect(
+        count_intensity_columns,
+        names(intensity_model_data)
+      )
+    )
+  )
+
+
+saveRDS(
+  publication_count_intensity,
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "analysis_count_intensity.rds"
+  )
+)
+
+write.csv(
+  publication_count_intensity,
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "analysis_count_intensity.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# -----------------------------------------------------------------------------
+# 14.5 First-detection / lag dataset
+# -----------------------------------------------------------------------------
+#
+# This is derived entirely from the canonical occurrence data and can also be
+# regenerated by Step 9. It is exported for transparency and convenience.
+# -----------------------------------------------------------------------------
+
+publication_first_detection <- first_detection %>%
+  select(
+    any_of(
+      c(
+        "host_type",
+        "country",
+        "NUTS_ID",
+        "iso_year",
+        "season2",
+        "year_c",
+        "event",
+        "lag_weeks",
+        "mig_sc",
+        "water_sc",
+        "poul_sc"
+      )
+    )
+  )
+
+
+saveRDS(
+  publication_first_detection,
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "analysis_first_detection.rds"
+  )
+)
+
+write.csv(
+  publication_first_detection,
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "analysis_first_detection.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# -----------------------------------------------------------------------------
+# 14.6 Region lookup
+# -----------------------------------------------------------------------------
+
+if (exists("region_lookup")) {
+
+  publication_region_lookup <- as.data.frame(
+    region_lookup
+  )
+
+  saveRDS(
+    publication_region_lookup,
+    file.path(
+      PUBLICATION_DATA_DIR,
+      "region_lookup.rds"
+    )
+  )
+
+  write.csv(
+    publication_region_lookup,
+    file.path(
+      PUBLICATION_DATA_DIR,
+      "region_lookup.csv"
+    ),
+    row.names = FALSE
+  )
+}
+
+
+# -----------------------------------------------------------------------------
+# 14.7 Dataset manifest
+# -----------------------------------------------------------------------------
+#
+# Records exactly what each exported file is intended to reproduce.
+# -----------------------------------------------------------------------------
+
+publication_data_manifest <- tibble::tribble(
+
+  ~file, ~analysis_unit, ~purpose,
+
+  "analysis_occurrence_wild.rds",
+  "NUTS3-year-week",
+  "Wild-bird occurrence GLMM, Figure 2, lag and Cox derivation",
+
+  "analysis_occurrence_poultry.rds",
+  "NUTS3-year-week",
+  "Poultry occurrence GLMM, Figure 2, lag and Cox derivation",
+
+  "analysis_count_timing.rds",
+  "Count-model analytical observation",
+  "Migration-relative negative-binomial timing model",
+
+  "analysis_count_intensity.rds",
+  "Count-model analytical observation",
+  "Migration-intensity negative-binomial model",
+
+  "analysis_first_detection.rds",
+  "NUTS3-year-season-host",
+  "Lag-to-first-outbreak analysis",
+
+  "region_lookup.rds",
+  "Country",
+  "Country-to-European-macro-region mapping"
+)
+
+
+write.csv(
+  publication_data_manifest,
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "DATA_MANIFEST.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# -----------------------------------------------------------------------------
+# 14.8 File integrity / dimensions
+# -----------------------------------------------------------------------------
+
+publication_data_check <- tibble::tibble(
+
+  dataset = c(
+    "occurrence_wild",
+    "occurrence_poultry",
+    "count_timing",
+    "count_intensity",
+    "first_detection"
+  ),
+
+  rows = c(
+    nrow(publication_occurrence_wild),
+    nrow(publication_occurrence_poultry),
+    nrow(publication_count_timing),
+    nrow(publication_count_intensity),
+    nrow(publication_first_detection)
+  ),
+
+  columns = c(
+    ncol(publication_occurrence_wild),
+    ncol(publication_occurrence_poultry),
+    ncol(publication_count_timing),
+    ncol(publication_count_intensity),
+    ncol(publication_first_detection)
+  )
+)
+
+
+cat("Exported publication datasets:\n")
+print(publication_data_check)
+
+
+write.csv(
+  publication_data_check,
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "DATASET_DIMENSIONS.csv"
+  ),
+  row.names = FALSE
+)
+
+
+# -----------------------------------------------------------------------------
+# 14.9 Optional checksums
+# -----------------------------------------------------------------------------
+#
+# MD5 hashes allow readers to verify that files have not changed.
+# -----------------------------------------------------------------------------
+
+exported_rds <- list.files(
+  PUBLICATION_DATA_DIR,
+  pattern = "\\.rds$",
+  full.names = TRUE
+)
+
+
+publication_checksums <- tibble::tibble(
+  file = basename(exported_rds),
+  md5 = unname(
+    tools::md5sum(
+      exported_rds
+    )
+  )
+)
+
+
+write.csv(
+  publication_checksums,
+  file.path(
+    PUBLICATION_DATA_DIR,
+    "MD5_CHECKSUMS.csv"
+  ),
+  row.names = FALSE
+)
+
+
+cat("\nChecksums:\n")
+print(publication_checksums)
+
+
+# -----------------------------------------------------------------------------
+# 14.10 Final message
+# -----------------------------------------------------------------------------
+
+cat("\n")
+cat("============================================================\n")
+cat("PUBLICATION DATA EXPORT COMPLETE\n")
+cat("============================================================\n\n")
+
+cat(
+  "Files written to:\n",
+  normalizePath(
+    PUBLICATION_DATA_DIR,
+    winslash = "/"
+  ),
+  "\n\n",
+  sep = ""
+)
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

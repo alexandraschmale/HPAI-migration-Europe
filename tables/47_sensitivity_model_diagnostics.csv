@@ -1,0 +1,6 @@
+"model","convergence","positive_definite_hessian"
+"Wild occurrence linear",0,TRUE
+"Poultry occurrence linear",0,TRUE
+"Poultry occurrence without poultry proximity",0,TRUE
+"Count timing df=3",0,TRUE
+"Count timing df=5",0,TRUE

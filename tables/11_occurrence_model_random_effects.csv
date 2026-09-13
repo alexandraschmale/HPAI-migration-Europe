@@ -1,0 +1,5 @@
+"Host","group","variance","SD"
+"Wild birds","NUTS_ID:country",0.693785455255809,0.832937845974001
+"Wild birds","country",0.416485374447533,0.645356780740338
+"Poultry","NUTS_ID:country",1.83182205412594,1.35344820888202
+"Poultry","country",1.05295167963041,1.02613433800376

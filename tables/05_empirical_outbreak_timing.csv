@@ -1,0 +1,5 @@
+"Host","Season","n_outbreak_region_weeks","mean_wso","median_wso","q25","q75","p05","p95"
+"Poultry","Autumn",1369,6.46384222059898,7,3,10,-5,17
+"Poultry","Spring",888,4.30405405405405,4,1,7,-2,11
+"Wild birds","Autumn",3445,5.18722786647315,5,3,9,-7,15
+"Wild birds","Spring",2413,3.8520513883133,3,1,6,-1,11

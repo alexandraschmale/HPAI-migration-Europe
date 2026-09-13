@@ -1,0 +1,3 @@
+"Host","AIC_linear","AIC_spline","delta_AIC","preferred"
+"Wild birds",48942.415854331,48502.689481642,439.726372688987,"Spline"
+"Poultry",21330.3401637886,21199.1239014043,131.216262384231,"Spline"

@@ -1,0 +1,7 @@
+"file","analysis_unit","purpose"
+"analysis_occurrence_wild.rds","NUTS3-year-week","Wild-bird occurrence GLMM, Figure 2, lag and Cox derivation"
+"analysis_occurrence_poultry.rds","NUTS3-year-week","Poultry occurrence GLMM, Figure 2, lag and Cox derivation"
+"analysis_count_timing.rds","Count-model analytical observation","Migration-relative negative-binomial timing model"
+"analysis_count_intensity.rds","Count-model analytical observation","Migration-intensity negative-binomial model"
+"analysis_first_detection.rds","NUTS3-year-season-host","Lag-to-first-outbreak analysis"
+"region_lookup.rds","Country","Country-to-European-macro-region mapping"

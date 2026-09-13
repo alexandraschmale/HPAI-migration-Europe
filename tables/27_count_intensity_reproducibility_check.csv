@@ -1,0 +1,5 @@
+"term","expected_beta","reproduced_beta","absolute_difference","matches"
+"mig_intensity_sc",0.202514249,0.202514249216431,2.16430845467741e-10,TRUE
+"mig_intensity_sc:year_c",0.019963041,0.019963041093106,9.31059986053473e-11,TRUE
+"mig_intensity_sc:host_typewild",0.014726904,0.0147269043116987,3.1169873106196e-10,TRUE
+"mig_intensity_sc:host_typewild:year_c",0.005840984,0.00584098424318353,2.43183526267565e-10,TRUE

@@ -1,0 +1,3 @@
+"host","convergence_code","positive_definite_hessian","n","AIC","BIC","logLik"
+"Wild birds",0,TRUE,360756,48502.689481642,48718.6086238123,-24231.344740821
+"Poultry",0,TRUE,360756,21199.1239014043,21415.0430435746,-10579.5619507022

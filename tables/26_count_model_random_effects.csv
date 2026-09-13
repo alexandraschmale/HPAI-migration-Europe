@@ -1,0 +1,7 @@
+"model","group","variance","SD"
+"Migration-relative timing","NUTS_ID:country_code",1.58497666700569,1.25895856445146
+"Migration-relative timing","country_code",0.766283862674051,0.875376411993179
+"Migration-relative timing","NUTS_ID:iso_year",2.55577277683907,1.59867844698021
+"Migration intensity","NUTS_ID:country_code",1.58124265736598,1.25747471440422
+"Migration intensity","country_code",0.405613407933064,0.636877859509234
+"Migration intensity","NUTS_ID:iso_year",2.65971598289777,1.63086356967644
